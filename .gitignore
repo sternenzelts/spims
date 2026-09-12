@@ -1,0 +1,8 @@
+/vendor
+/node_modules
+/.env
+/storage/*.key
+/public/build
+/public/hot
+.DS_Store
+Thumbs.db
