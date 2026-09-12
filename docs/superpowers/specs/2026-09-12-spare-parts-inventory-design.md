@@ -420,15 +420,23 @@ create table count_sessions (
 );
 
 create table count_lines (
-  id               bigint generated always as identity primary key,
-  count_session_id bigint not null references count_sessions(id) on delete cascade,
-  part_id          bigint not null references parts(id),
-  system_qty       numeric(14,3) not null,     -- snapshot taken when the session opened
-  counted_qty      numeric(14,3),
-  variance         numeric(14,3) generated always as (counted_qty - system_qty) stored,
-  reason_code      text check (reason_code in ('miscount','damage','unrecorded_issue',
-                      'unrecorded_receipt','found_stock','shrinkage','other')),
-  notes            text,
+  id                bigint generated always as identity primary key,
+  count_session_id  bigint not null references count_sessions(id) on delete cascade,
+  part_id           bigint not null references parts(id),
+  system_qty        numeric(14,3) not null,     -- snapshot when the session opened
+  counted_qty       numeric(14,3) check (counted_qty is null or counted_qty >= 0),
+  counted_at        timestamptz,                -- when the shelf was physically counted
+
+  -- Drift between session open and the physical count. FOR ANALYSIS ONLY.
+  -- This is NOT the quantity posted to the ledger — see posting_delta and §5.6.
+  snapshot_variance numeric(14,3) generated always as (counted_qty - system_qty) stored,
+
+  on_hand_at_post   numeric(14,3),              -- live balance read under lock at posting
+  posting_delta     numeric(14,3),              -- counted_qty - on_hand_at_post; the movement qty
+
+  reason_code       text check (reason_code in ('miscount','damage','unrecorded_issue',
+                       'unrecorded_receipt','found_stock','shrinkage','other')),
+  notes             text,
   unique (count_session_id, part_id)
 );
 
@@ -528,7 +536,32 @@ enforces only `critical_level <= min_level` and `max_level >= min_level` as hard
 legitimately set them equal, and a hard constraint would block a valid configuration. The part
 editor warns when the conventional ordering is violated rather than refusing to save.
 
-### 4.5 Two distinct audit trails
+### 4.5 What `balance_after` means, and what backdating does to it
+
+The ledger has two time axes and they do not always agree: `occurred_at` (when stock physically
+moved) and `id` / `recorded_at` (when the system was told). Backdated paper-fallback entries (§8.4)
+are exactly the case where they diverge, so the meaning of the balance column has to be pinned down
+or the §13.1 invariant test is untestable.
+
+**The canonical order of the ledger is `id` — recording order.** `balance_after` is the running sum
+of `quantity` in `id` order, and nothing ever rewrites an already-stamped value.
+
+Consequences, all of them intended:
+
+- A backdated entry **appends at the end** of the ledger with the balance current at the moment it
+  was recorded. Its `occurred_at` is earlier, and that is honest: the parts moved in the past, the
+  system learned of it later.
+- **Consumption analytics filter on `occurred_at`** (§6.2), so a backdated entry does retroactively
+  correct August's consumption figures — which is the desired behaviour.
+- **Balance history is reconstructed in `id` order**, so a backdated entry does *not* retroactively
+  rewrite the balances stamped on rows recorded before it. This is the same treatment a late journal
+  entry receives in accounting: the correction is visible as its own line, not smeared backwards
+  through the history.
+- Point-in-time balance for a past instant is therefore only exact up to the backdating that had
+  been recorded by then. This is an inherent property of late entry, not a defect — and it is
+  another reason backdated entries carry `is_backdated` and a mandatory reason, and are reported on.
+
+### 4.6 Two distinct audit trails
 
 The proposal's §3B describes an "audit trail" as "a history/log of all actions and transactions."
 That is genuinely two different things, and conflating them produces a table that serves neither:
@@ -619,6 +652,30 @@ Instead:
 This keeps the ledger honest, keeps the non-negative invariant intact, and records the discrepancy
 as what it actually is rather than hiding it inside a withdrawal.
 
+**The adjustment and the withdrawal commit in a single database transaction.** They are two separate
+`stock_transactions` rows — one `adjustment`, one `withdrawal` — but one atomic commit. If they were
+committed separately and the withdrawal then failed, the ledger would be left holding an unexplained
+stock increase that nobody issued, which is precisely the kind of orphan record this whole design
+exists to prevent.
+
+Sequencing, given that supervisor authorisation is a human step and cannot be performed while
+holding row locks:
+
+```
+Step 4  (review)  custodian hits insufficient stock
+                  → supervisor authenticates and supplies a reason code
+                  → authorisation is attached to the DRAFT; no locks held yet
+Step 6  (commit)  BEGIN
+                    SELECT ... FOR UPDATE over the union of affected parts, ORDER BY part_id
+                    INSERT adjustment movement   (balance_after = corrected balance)
+                    INSERT withdrawal movements  (balance_after = corrected balance - qty)
+                    UPDATE part_stock once per part
+                  COMMIT
+```
+
+The adjusted part is already a member of the withdrawal's part set, so the union is unchanged and
+the lock ordering of §5.2 is unaffected.
+
 ### 5.4 Replenishment (proposal §3B)
 
 Custodian enters part number and quantity received, plus supplier, DR/PO reference and optionally
@@ -636,12 +693,58 @@ original and the reversal remain permanently visible in the ledger.
 
 1. **Open session** — scope by location, criticality class, or all parts. `system_qty` is snapshotted
    per line at open.
-2. **Count** — custodian enters counted quantities. Withdrawals may continue during the session;
-   variance is computed against the snapshot, and movements occurring mid-session are listed on the
-   posting screen so they are not mistaken for shrinkage.
-3. **Review** — every line whose variance exceeds tolerance requires a `reason_code`.
-4. **Post** — requires supervisor role. Generates one `count_variance` movement per non-zero variance
-   and resolves any open `inventory_discrepancy` alerts for the counted parts.
+2. **Count** — custodian enters counted quantities and `counted_at` is stamped. Withdrawals may
+   continue during the session; movements occurring mid-session are listed on the posting screen so
+   that ordinary issues are not mistaken for shrinkage.
+3. **Review** — a `reason_code` is required on every line where a reason is warranted (§5.6.2).
+4. **Post** — requires supervisor role. Generates one `count_variance` movement per non-zero
+   `posting_delta` and resolves any open `inventory_discrepancy` alerts for the counted parts.
+
+#### 5.6.1 A physical count corrects against the live balance, not the snapshot
+
+Posting the snapshot difference is wrong, and it breaks the `on_hand >= 0` constraint on a path that
+is genuinely reachable: a session opens with `system_qty = 5`, three units are legitimately withdrawn
+while the session is open leaving `on_hand = 2`, the custodian counts an empty shelf and enters 0.
+The snapshot variance is −5, and posting −5 against an on-hand of 2 drives the balance to −3, which
+the database rejects with an opaque constraint error at the worst possible moment.
+
+The correct semantics: **a physical count asserts what is on the shelf, so posting must make
+`on_hand` equal `counted_qty`.** At posting time, inside the locked transaction:
+
+```
+posting_delta = counted_qty - on_hand_at_post     (on_hand_at_post read under FOR UPDATE)
+```
+
+The resulting balance is exactly `counted_qty`, which is non-negative by its own constraint, so the
+`on_hand >= 0` check can never be violated by a count posting. `system_qty` and `snapshot_variance`
+are retained for analysis — they show how far the system had drifted since the session opened — but
+they are never the posted quantity.
+
+**Staleness guard.** If any movement for a part occurred after its `counted_at`, the count is stale.
+Those lines are flagged on the posting screen and require either a re-count or explicit supervisor
+acknowledgement before the session can be posted.
+
+#### 5.6.2 When a reason code is required
+
+`variance_tolerance_pct` is a percentage while `posting_delta` is absolute, so the comparison needs a
+denominator — and `system_qty` can be zero (found stock on a part the system believes it has none
+of), which is a division by zero on the posting screen.
+
+The rule, stated to avoid that:
+
+> A `reason_code` is required when `posting_delta <> 0` **and** either `system_qty = 0`
+> or `abs(posting_delta) / system_qty * 100 > variance_tolerance_pct`.
+
+Any discrepancy on a part the system thought was empty always demands an explanation. The default
+tolerance of 0 means every non-zero delta requires a reason, which is the safe default to start from
+and can be relaxed per session once real counting data exists.
+
+#### 5.6.3 Uniqueness under programmatic generation
+
+`stock_transaction_lines` carries `unique (stock_transaction_id, part_id)`. Both programmatic
+producers respect it: a count session emits exactly one adjustment transaction with one line per
+part, and `count_lines` is already unique on `(count_session_id, part_id)`; the §5.3 override emits
+its own separate single-line adjustment transaction. Neither can generate a duplicate.
 
 ### 5.7 Excel import (Phase 1 → Phase 4)
 
@@ -914,6 +1017,19 @@ Resolution, pinned here so it is not rediscovered mid-project:
 
 Use session mode (port 5432) only for migrations and the backup job.
 
+### 12.2 Generated columns in Laravel migrations
+
+`count_lines.snapshot_variance` is a generated column. Laravel's schema builder expresses this as:
+
+```php
+$table->decimal('snapshot_variance', 14, 3)
+      ->storedAs('counted_qty - system_qty')
+      ->nullable();
+```
+
+Use `storedAs()`, not `virtualAs()` — Postgres implements only `GENERATED ALWAYS AS ... STORED` and
+rejects virtual generated columns, so `virtualAs()` fails at migration time rather than at review.
+
 ---
 
 ## 13. Testing strategy
@@ -924,9 +1040,16 @@ partial indexes, generated columns and triggers, none of which SQLite reproduces
 ### 13.1 The invariant test
 
 The single most valuable test in this system: generate a randomised sequence of withdrawals,
-replenishments, adjustments and reversals, then assert for every part that
-`part_stock.on_hand == SUM(stock_movements.quantity)` and that each `balance_after` equals the
-running sum of the movements preceding it. If this test passes, the ledger is sound.
+replenishments, adjustments, reversals, count postings **and backdated entries**, then assert for
+every part that `part_stock.on_hand == SUM(stock_movements.quantity)` and that each `balance_after`
+equals the running sum of all movements for that part with a lower `id` — **ordered by `id`, not by
+`occurred_at`**, per §4.5. Including backdated entries in the generated sequence is the point: an
+`occurred_at` ordering would pass on well-behaved data and fail the moment the paper fallback is
+used in production. If this test passes, the ledger is sound.
+
+A companion test asserts the count-posting guarantee of §5.6.1 directly: after posting any count
+session, every counted part's `on_hand` equals its `counted_qty` exactly, including the case where
+withdrawals occurred while the session was open.
 
 ### 13.2 Concurrency test
 
@@ -972,7 +1095,7 @@ data, not merely in CI.
 | §3A | Custodian duties | `custodian` role (§3.4); counting (§5.6); replenishment (§5.4) |
 | §3B | All 12 database fields | `parts`, `part_stock`, `stock_movements` (§4.3). "Equipment/application" → `part_equipment`; "Depletion rate" and the two history fields are derived from the ledger, not stored columns |
 | §3B | All 19 software functions | §5 workflows, §6 analytics, §7 alerts, §9 reports (incl. Report I and the dashboard) |
-| §3B | Audit trail with running balance | `stock_movements.balance_after` (§4.1, §4.5) |
+| §3B | Audit trail with running balance | `stock_movements.balance_after` (§4.1, §4.6) |
 | §3C | Scanner for identification only, scanned last | §5.1 Step 5; §10 |
 | §4 | Withdrawal Steps 1–8 | §5.1, one-to-one mapping |
 | §4 Step 8 | All 10 transaction record fields | `stock_transactions` + lines + movements (§4.3) |
