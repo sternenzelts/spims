@@ -7,10 +7,11 @@
 | **Deployment model** | One install per company — separate application and database (§3.6) |
 | **Source proposal** | *Project Proposal: Spare Parts Inventory Management System*, Engr. Jabez J. Agaya — prepared by Microtech for a customer |
 | **Requirements** | PRD: `docs/prd/Microtech_SPIMS_PRD_v1.0.md` |
+| **Implementation** | Roadmap and plans: `docs/superpowers/plans/` |
 | **Current focus** | Microtech production and demo installs. Customer installs parked until customer details are confirmed |
 | **Document status** | Draft for review |
 | **Date** | 2026-09-12 |
-| **Stack** | Laravel 12 (PHP 8.3) · Livewire 3 · Tailwind · Supabase Postgres (free tier) |
+| **Stack** | Laravel 13 (PHP 8.4+) · Livewire 4 + Flux · Tailwind · Supabase Postgres (free tier) |
 | **Classification** | Confidential — for Microtech use only |
 
 ---
@@ -97,7 +98,7 @@ Postgres. One codebase, one deployment, one authentication system.
                                   HTTPS
                                       │
                     ┌─────────────────▼──────────────────┐
-                    │        Laravel 12 application      │
+                    │        Laravel 13 application      │
                     │                                    │
                     │  Livewire UI · Policies (RBAC)     │
                     │  Domain services:                  │
@@ -242,8 +243,8 @@ Three consequences designed in deliberately:
 
 ### 4.2 Conventions
 
-Per Supabase Postgres guidance: `bigint generated always as identity` primary keys (sequential, no
-index fragmentation); `text` rather than `varchar(n)`; `timestamptz` never bare `timestamp`;
+Per Supabase Postgres guidance: sequential `bigint` primary keys (no index fragmentation), created as
+`bigserial` by Laravel's `$table->id()`, which does not emit identity columns; `text` rather than `varchar(n)`; `timestamptz` never bare `timestamp`;
 `numeric` for all quantities and money; `text` + `CHECK` rather than Postgres enums (enum values
 cannot be altered transactionally); foreign key columns used in joins, filters and lookups explicitly
 indexed. User-reference audit columns such as `reversed_by_user_id` are not indexed — users are never
@@ -257,7 +258,7 @@ create extension if not exists pg_trgm;
 -- ─────────────────────────── Master data ───────────────────────────
 
 create table storage_locations (
-  id          bigint generated always as identity primary key,
+  id          bigserial primary key,
   code        text not null unique,
   name        text not null,
   description text,
@@ -267,7 +268,7 @@ create table storage_locations (
 );
 
 create table equipment (
-  id         bigint generated always as identity primary key,
+  id         bigserial primary key,
   code       text not null unique,
   name       text not null,
   area       text,
@@ -277,7 +278,7 @@ create table equipment (
 );
 
 create table parts (
-  id                  bigint generated always as identity primary key,
+  id                  bigserial primary key,
   part_number         text not null,
   description         text not null,
   unit_of_measure     text not null default 'pcs',
@@ -328,13 +329,26 @@ create table part_stock (
   constraint part_stock_non_negative check (on_hand >= 0)
 );
 
+-- Every part gets its lock target the moment it exists, however it was inserted.
+create or replace function create_part_stock_row() returns trigger
+language plpgsql as $fn$
+begin
+  insert into part_stock (part_id) values (new.id);
+  return new;
+end;
+$fn$;
+
+create trigger parts_create_stock_row
+  after insert on parts
+  for each row execute function create_part_stock_row();
+
 -- Requestors. Never authenticate into the application.
 create table personnel (
-  id                   bigint generated always as identity primary key,
+  id                   bigserial primary key,
   employee_no          text not null unique,
   full_name            text not null,
   department           text,
-  badge_uid_hash       text unique,   -- sha256(uid || pepper) — the scan lookup key
+  badge_uid_hash       text unique,   -- hmac_sha256(uid, pepper) — the scan lookup key
   badge_uid_encrypted  text,          -- Laravel encrypted cast, admin-visible only
   badge_uid_masked     text,          -- display form, e.g. A1234**** as in the proposal §3B sample
   photo_path           text,          -- Supabase Storage key; shown at scan for visual confirm
@@ -348,7 +362,7 @@ create table personnel (
 -- Maintenance, Breakdown Repair, Machine Modification, Replacement of Worn Part, and
 -- Other Maintenance Activity (requires_remarks = true).
 create table withdrawal_purposes (
-  id               bigint generated always as identity primary key,
+  id               bigserial primary key,
   code             text not null unique,     -- stable identifier; never changed once used
   name             text not null unique,     -- display name; may be renamed
   requires_remarks boolean not null default false,
@@ -361,8 +375,8 @@ create table withdrawal_purposes (
 -- ─────────────────────── Transactions and ledger ───────────────────────
 
 create table stock_transactions (
-  id                      bigint generated always as identity primary key,
-  transaction_no          text not null unique,          -- WD-2026-000123 / RP- / AJ- / OP-
+  id                      bigserial primary key,
+  transaction_no          text unique,                   -- WD-2026-000123 / RP- / AJ- / OP-; set on completion
   type                    text not null
                             check (type in ('withdrawal','replenishment','adjustment','opening')),
   -- Status vocabulary follows the PRD: draft -> completed | cancelled,
@@ -395,6 +409,10 @@ create table stock_transactions (
   created_at              timestamptz not null default now(),
   updated_at              timestamptz not null default now(),
 
+  -- Numbers are assigned at completion (TransactionNumberer), so drafts and cancelled drafts have none.
+  constraint posted_is_numbered check (
+    status in ('draft','cancelled') or transaction_no is not null
+  ),
   -- A completed withdrawal must be fully attributed. This is the accountability
   -- guarantee of proposal §2 expressed as a database constraint.
   -- Reversing transactions are exempt: they copy personnel/equipment/purpose from the
@@ -438,11 +456,12 @@ create unique index stock_transactions_reverses_key
   where reverses_transaction_id is not null;
 
 create table stock_transaction_lines (
-  id                   bigint generated always as identity primary key,
+  id                   bigserial primary key,
   stock_transaction_id bigint not null references stock_transactions(id) on delete cascade,
   line_no              integer not null,
   part_id              bigint not null references parts(id),
   quantity             numeric(14,3) not null check (quantity > 0),
+  direction            smallint not null check (direction in (-1, 1)),  -- fixed by type except adjustments
   equipment_id         bigint references equipment(id),   -- per-line override of the header
   purpose_id           bigint references withdrawal_purposes(id), -- per-line override of the header
   unit_cost            numeric(14,4),                     -- replenishment only
@@ -455,7 +474,7 @@ create index stock_transaction_lines_part_idx on stock_transaction_lines (part_i
 
 -- THE LEDGER. Append-only. Signed quantities. Never updated, never deleted.
 create table stock_movements (
-  id                        bigint generated always as identity primary key,
+  id                        bigserial primary key,
   part_id                   bigint not null references parts(id),
   stock_transaction_id      bigint not null references stock_transactions(id),
   stock_transaction_line_id bigint references stock_transaction_lines(id),
@@ -485,22 +504,28 @@ create index stock_movements_withdrawals_idx
   on stock_movements (part_id, occurred_at)
   where movement_type = 'withdrawal';
 
+-- Opening balances cannot be reversed, so a part has at most one.
+create unique index stock_movements_one_opening_per_part
+  on stock_movements (part_id)
+  where movement_type = 'opening';
+
 -- Enforce append-only at the database, not merely by convention in the application.
-create or replace function prevent_ledger_mutation() returns trigger
+-- The function is created with audit_logs and shared by both append-only tables.
+create or replace function prevent_append_only_mutation() returns trigger
 language plpgsql as $fn$
 begin
-  raise exception 'stock_movements is append-only (attempted % on id %)', tg_op, old.id;
+  raise exception '% is append-only (attempted % on id %)', tg_table_name, tg_op, old.id;
 end;
 $fn$;
 
-create trigger stock_movements_immutable
+create trigger stock_movements_append_only
   before update or delete on stock_movements
-  for each row execute function prevent_ledger_mutation();
+  for each row execute function prevent_append_only_mutation();
 
 -- ─────────────────── Physical counting (fills the §6 gap) ───────────────────
 
 create table count_sessions (
-  id                     bigint generated always as identity primary key,
+  id                     bigserial primary key,
   session_no             text not null unique,
   scope                  text not null check (scope in ('full','location','criticality','adhoc')),
   scope_value            text,
@@ -515,7 +540,7 @@ create table count_sessions (
 );
 
 create table count_lines (
-  id                bigint generated always as identity primary key,
+  id                bigserial primary key,
   count_session_id  bigint not null references count_sessions(id) on delete cascade,
   part_id           bigint not null references parts(id),
   system_qty        numeric(14,3) not null,     -- snapshot when the session opened
@@ -540,7 +565,7 @@ create index count_lines_part_idx on count_lines (part_id);
 -- ─────────────────────────── Alerts ───────────────────────────
 
 create table alerts (
-  id                      bigint generated always as identity primary key,
+  id                      bigserial primary key,
   -- NOT NULL is load-bearing: Postgres treats NULLs as distinct in a unique index,
   -- so a nullable part_id would silently defeat the open-once guarantee below.
   part_id                 bigint not null references parts(id),
@@ -569,11 +594,11 @@ create index alerts_status_idx on alerts (status, opened_at desc);
 -- ──────────────── Configuration audit trail and settings ────────────────
 
 create table audit_logs (
-  id             bigint generated always as identity primary key,
+  id             bigserial primary key,
   user_id        bigint references users(id),
-  auditable_type text not null,
-  auditable_id   bigint not null,
-  event          text not null,   -- created | updated | deleted | reversed | override_authorised | manual_identification_authorised | badge_scan_rejected
+  auditable_type text not null,   -- morph map name, e.g. part, setting, stock_transaction
+  auditable_id   text not null,   -- text: settings are keyed by name
+  event          text not null,   -- created | updated | deleted | completed | reversed | override_authorised | manual_identification_authorised | badge_enrolled | badge_replaced | badge_released | badge_scan_rejected
   old_values     jsonb,
   new_values     jsonb,
   ip_address     inet,
@@ -583,6 +608,10 @@ create table audit_logs (
 
 create index audit_logs_auditable_idx on audit_logs (auditable_type, auditable_id, created_at desc);
 create index audit_logs_user_idx      on audit_logs (user_id, created_at desc);
+
+create trigger audit_logs_append_only
+  before update or delete on audit_logs
+  for each row execute function prevent_append_only_mutation();
 
 -- Per-install configuration (§3.6). Keys: company.name, company.logo_path, company.address,
 -- regional.timezone, regional.currency, numbering.prefixes, analysis.window_months,
@@ -598,8 +627,17 @@ create table settings (
   updated_at         timestamptz not null default now()
 );
 
+-- Gap-free numbering per prefix and year (year in the install time zone). The row is locked by an
+-- upsert inside the posting transaction, after the stock rows, so a rollback returns the number.
+create table transaction_number_sequences (
+  prefix     text not null,
+  year       integer not null,
+  last_value bigint not null,
+  primary key (prefix, year)
+);
+
 create table import_batches (
-  id                  bigint generated always as identity primary key,
+  id                  bigserial primary key,
   filename            text not null,
   storage_path        text,
   status              text not null default 'pending'
@@ -1067,9 +1105,10 @@ authentication and is not clonable by the same trivial means.
 
 ### 8.2 Badge storage
 
-Badge UIDs are stored as `sha256(uid || pepper)` for scan lookup, plus a Laravel-encrypted copy for
-administrative use, plus the last four characters for display. Reports render them masked as
-`A1234****`, matching the proposal's own §3B sample. A database compromise does not yield a usable
+Badge UIDs are stored as an HMAC-SHA256 keyed with a per-install pepper (`BADGE_PEPPER`) for scan
+lookup, plus a Laravel-encrypted copy for administrative use, plus a masked display form. The masked
+form shows at most the first five characters and always hides the last four, so a nine-character UID
+renders as `A1234****`, matching the proposal's own §3B sample. A database compromise does not yield a usable
 set of badge identifiers.
 
 ### 8.3 Application security baseline
@@ -1221,6 +1260,10 @@ Resolution, pinned here so it is not rediscovered mid-project:
 ```
 
 Use session mode (port 5432) only for migrations and the backup job.
+
+The same connection sets `'timezone' => 'UTC'`. Laravel formats datetimes without an offset, so the
+session time zone decides how they are read; a local Postgres installed with the machine's time zone
+would otherwise shift every stored instant.
 
 ### 12.2 Generated columns in Laravel migrations
 
@@ -1384,7 +1427,7 @@ in Phase 4 and loaded with sample data rather than real data.
 
 | Decision | Choice | Date |
 |---|---|---|
-| UI architecture | Laravel + Livewire 3 (not Inertia/SPA) | 2026-09-12 |
+| UI architecture | Laravel + Livewire (not Inertia/SPA) | 2026-09-12 |
 | Authentication | Laravel Fortify; Supabase Auth not used | 2026-09-12 |
 | Database | Supabase Postgres, **free tier** | 2026-09-12 |
 | Stock model | Append-only ledger with derived cache | 2026-09-12 |
@@ -1400,3 +1443,8 @@ in Phase 4 and loaded with sample data rather than real data.
 | Microtech installs | Production (own storeroom) and demo (sample data), kept separate | 2026-09-13 |
 | Withdrawal purposes | Per-install table seeded with the proposal's list, replacing the `CHECK` constraint | 2026-09-13 |
 | Predicted out-of-stock | Straight-line projection at max(window, recent 30-day) rate; risk against lead time; evaluated nightly and on commit | 2026-09-13 |
+| Framework versions | Laravel 13, Livewire 4 with Flux, PHP 8.4+ (Pest 5's floor); Laravel 12's bug-fix support ended 2026-08-13 | 2026-09-13 |
+| Primary keys | `bigserial` via Laravel's `$table->id()` instead of identity columns | 2026-09-13 |
+| Badge hashing | HMAC-SHA256 with a per-install pepper; masked form hides the last four characters and shows at most five | 2026-09-13 |
+| Transaction numbering | Assigned at completion from a per-prefix, per-year sequence row locked inside the posting transaction; no gaps | 2026-09-13 |
+| Delivery | Seven implementation plans; each detailed when the previous one is merged (`docs/superpowers/plans/`) | 2026-09-13 |
