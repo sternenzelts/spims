@@ -5488,7 +5488,10 @@ function postConcurrently(array $transactionIds, array $lockedPartIds): array
     $holder->beginTransaction();
     $holder->table('part_stock')->whereIn('part_id', $lockedPartIds)->lockForUpdate()->get();
 
-    $pool = Process::pool(function (Pool $pool) use ($transactionIds): void {
+    // Children read .env, which points at the development database; send them to this test's database.
+    $database = config('database.connections.'.config('database.default').'.database');
+
+    $pool = Process::pool(function (Pool $pool) use ($transactionIds, $database): void {
         foreach ($transactionIds as $transactionId) {
             $post = static function (StockLedger $ledger) use ($transactionId): string {
                 try {
@@ -5503,6 +5506,7 @@ function postConcurrently(array $transactionIds, array $lockedPartIds): array
             $pool->path(base_path())
                 ->env([
                     'LARAVEL_INVOKABLE_CLOSURE' => base64_encode(serialize(new SerializableClosure($post))),
+                    'DB_DATABASE' => $database,
                     'SPIMS_LOCK_TIMEOUT' => '30s',
                 ])
                 ->command([PHP_BINARY, 'artisan', 'invoke-serialized-closure']);
@@ -5635,7 +5639,7 @@ it('gives up with StockBusy and writes nothing while another station holds the s
 php artisan config:clear && php artisan test tests/Committed
 ```
 
-Expected: PASS, 4 tests. The child processes read `.env` and inherit the test database from `phpunit.xml`, which is why `config:clear` must run first.
+Expected: PASS, 4 tests. The child processes boot from `.env`, so `postConcurrently()` passes them the test database name explicitly, and `config:clear` makes sure no cached configuration overrides it.
 
 - [ ] **Step 4: Prove the tests can fail**
 
