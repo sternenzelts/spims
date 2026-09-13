@@ -46,7 +46,7 @@ Three readings of the proposal shape the entire architecture:
 Part master and storage locations · equipment register · personnel and badge register · multi-line
 withdrawal with scan-last commit · replenishment receipts · stock adjustments · physical/cycle
 counting with variance posting · Excel/CSV part and opening-balance import · consumption and
-depletion analytics · five alert types · the eight reports of proposal §7 · role-based access
+depletion analytics · five alert types · the eight reports of proposal §7 plus Replenishment (I) and Exceptions (J) · role-based access
 control · dual audit trail (stock ledger + configuration changes) · paper-fallback backdated entry ·
 nightly off-platform database backup.
 
@@ -55,7 +55,8 @@ nightly off-platform database backup.
 Offline-capable PWA station · lead-time-aware reorder point and statistical safety stock ·
 multi-location stock per part · manufacturer/alternate part numbers (`part_aliases`) · inventory
 valuation reporting · purchase order management · supplier master · barcode labelling of parts
-themselves · mobile app.
+themselves · mobile app · return-to-stock of unused parts as its own transaction type (interim: reverse
+and re-record; PRD Appendix A Q13 decides whether this moves into v1).
 
 ### 2.3 Assumptions
 
@@ -149,7 +150,7 @@ for roughly twenty lines of migration.
 | `custodian` | Process withdrawals, replenishments; perform counts; view stock and own transactions. **Cannot** edit min/max levels, void transactions, or post count variances. |
 | `supervisor` | All custodian rights, plus: authorise stock-correction overrides, void/reverse transactions, post count variances, manage personnel and badges. |
 | `planner` | Read-only on transactions; full analytics and reports; owns min/max, reorder point, critical level and criticality classification. |
-| `admin` | User management, system settings, full access. |
+| `admin` | User management, system settings, imports (including opening balances), full badge identifiers. **Does not** process stock transactions — a user needing both holds both roles, so IT administration and stock handling stay separate. |
 
 Implemented with `spatie/laravel-permission` plus Laravel policies. Four roles do not justify a
 hand-rolled system when a battle-tested one exists.
@@ -281,7 +282,7 @@ create table personnel (
   department           text,
   badge_uid_hash       text unique,   -- sha256(uid || pepper) — the scan lookup key
   badge_uid_encrypted  text,          -- Laravel encrypted cast, admin-visible only
-  badge_uid_last4      text,          -- report display: A1234****
+  badge_uid_masked     text,          -- display form, e.g. A1234**** as in the proposal §3B sample
   photo_path           text,          -- Supabase Storage key; shown at scan for visual confirm
   is_active            boolean not null default true,
   created_at           timestamptz not null default now(),
@@ -295,8 +296,11 @@ create table stock_transactions (
   transaction_no          text not null unique,          -- WD-2026-000123 / RP- / AJ- / OP-
   type                    text not null
                             check (type in ('withdrawal','replenishment','adjustment','opening')),
+  -- Status vocabulary follows the PRD (Kora terminology): draft -> completed | cancelled,
+  -- completed -> reversed. There is no pending/approved step; exceptions are authorised
+  -- while the transaction is still a draft.
   status                  text not null default 'draft'
-                            check (status in ('draft','committed','voided')),
+                            check (status in ('draft','completed','cancelled','reversed')),
   custodian_user_id       bigint not null references users(id),
   personnel_id            bigint references personnel(id),
   equipment_id            bigint references equipment(id),
@@ -313,19 +317,36 @@ create table stock_transactions (
   is_backdated            boolean not null default false,
   backdate_reason         text,
   reverses_transaction_id bigint references stock_transactions(id),
-  voided_by_user_id       bigint references users(id),
-  void_reason             text,
+  reversed_by_user_id     bigint references users(id),
+  reversal_reason         text,
+  -- How the requesting personnel was identified (PRD FR-SPIMS-007, FR-SPIMS-012).
+  identification_method   text check (identification_method in
+                            ('badge_scan','supervisor_manual','paper_form')),
+  identification_authorised_by_user_id bigint references users(id),
+  identification_reason   text,
+  paper_form_no           text unique,  -- backdated entries only; unique blocks double entry
   created_at              timestamptz not null default now(),
   updated_at              timestamptz not null default now(),
 
-  -- A committed withdrawal must be fully attributed. This is the accountability
+  -- A completed withdrawal must be fully attributed. This is the accountability
   -- guarantee of proposal §2 expressed as a database constraint.
-  constraint committed_withdrawal_is_attributed check (
-    not (status = 'committed' and type = 'withdrawal')
-    or (personnel_id is not null and equipment_id is not null and purpose is not null)
+  -- Reversing transactions are exempt: they copy personnel/equipment/purpose from the
+  -- original for reporting, but nobody was identified at the counter when they were made.
+  constraint completed_withdrawal_is_attributed check (
+    not (status = 'completed' and type = 'withdrawal' and reverses_transaction_id is null)
+    or (personnel_id is not null and equipment_id is not null and purpose is not null
+        and identification_method is not null)
   ),
-  constraint committed_has_recorded_at check (
-    status <> 'committed' or recorded_at is not null
+  constraint completed_has_recorded_at check (
+    status not in ('completed','reversed') or recorded_at is not null
+  ),
+  -- Manual identification is an exception: it must name the supervisor and say why.
+  constraint manual_identification_is_authorised check (
+    identification_method is distinct from 'supervisor_manual'
+    or (identification_authorised_by_user_id is not null and identification_reason is not null)
+  ),
+  constraint backdated_has_paper_form check (
+    not is_backdated or paper_form_no is not null
   ),
   constraint backdated_has_reason check (
     not is_backdated or backdate_reason is not null
@@ -333,7 +354,7 @@ create table stock_transactions (
   -- An adjustment moves stock without a physical issue or receipt. It must always
   -- say why, or the ledger accumulates unexplained corrections.
   constraint adjustment_has_reason check (
-    type <> 'adjustment' or status <> 'committed' or reason_code is not null
+    type <> 'adjustment' or status <> 'completed' or reason_code is not null
   )
 );
 
@@ -478,7 +499,7 @@ create table audit_logs (
   user_id        bigint references users(id),
   auditable_type text not null,
   auditable_id   bigint not null,
-  event          text not null,   -- created | updated | deleted | voided | override_authorised
+  event          text not null,   -- created | updated | deleted | reversed | override_authorised | manual_identification_authorised | badge_scan_rejected
   old_values     jsonb,
   new_values     jsonb,
   ip_address     inet,
@@ -501,7 +522,7 @@ create table import_batches (
   filename            text not null,
   storage_path        text,
   status              text not null default 'pending'
-                        check (status in ('pending','validated','committed','failed','cancelled')),
+                        check (status in ('pending','validated','completed','failed','cancelled')),
   rows_total          integer not null default 0,
   rows_created        integer not null default 0,
   rows_updated        integer not null default 0,
@@ -509,7 +530,7 @@ create table import_batches (
   errors              jsonb not null default '[]',
   imported_by_user_id bigint not null references users(id),
   created_at          timestamptz not null default now(),
-  committed_at        timestamptz
+  completed_at        timestamptz
 );
 ```
 
@@ -568,7 +589,7 @@ That is genuinely two different things, and conflating them produces a table tha
 
 | | **Stock ledger** (`stock_movements`) | **Configuration audit** (`audit_logs`) |
 |---|---|---|
-| Records | Every quantity change, with resulting balance | Who changed a min level, voided a transaction, edited a part, authorised an override |
+| Records | Every quantity change, with resulting balance | Who changed a min level, reversed a transaction, edited a part, authorised an override |
 | Shape | Append-only, signed, balance-stamped | Append-only, old/new value diff |
 | Answers | "What is this part's history and is the balance right?" | "Who raised the reorder point last March, and why?" |
 | Matches | The §3B sample table exactly | The §3B phrase "all actions" |
@@ -608,7 +629,7 @@ BEGIN
       INSERT stock_movements (quantity = -qty, balance_after = on_hand - qty, ...)
       UPDATE part_stock SET on_hand = on_hand - qty
 
-  UPDATE stock_transactions SET status='committed', recorded_at=now()
+  UPDATE stock_transactions SET status='completed', recorded_at=now()
   INSERT audit_logs
 COMMIT
 
@@ -676,6 +697,18 @@ Step 6  (commit)  BEGIN
 The adjusted part is already a member of the withdrawal's part set, so the union is unchanged and
 the lock ordering of §5.2 is unaffected.
 
+**The adjustment quantity is computed under lock at commit, never at authorisation:**
+`adjustment = verified_qty − on_hand_locked`. Computing it at authorisation time is wrong when stock
+moves in between. Concretely: recorded 0, supervisor verifies 5 on the shelf and authorises; a
+replenishment of 10 is then committed at another station; at commit the locked balance is 10, and a
+"bring the balance to 5" adjustment would *remove* 5 units that are physically there. Two rules
+close this:
+
+- An override adjustment may only **increase** the balance.
+- If the locked balance already covers the line, the withdrawal commits **without** the adjustment,
+  the override is discarded, and an `inventory_discrepancy` alert is still opened — the original
+  discrepancy was real and the part needs counting.
+
 ### 5.4 Replenishment (proposal §3B)
 
 Custodian enters part number and quantity received, plus supplier, DR/PO reference and optionally
@@ -683,11 +716,26 @@ unit cost. Commits through the same locked path with positive quantities. Suppli
 not in the proposal but a receiving record without a delivery-receipt number cannot be audited
 against the supplier, so they are included.
 
-### 5.5 Void and correction
+### 5.5 Reversal and correction
 
-Committed transactions are never edited or deleted. A supervisor issues a **reversing transaction**
-carrying `reverses_transaction_id` and a reason; it writes equal and opposite movements. Both the
-original and the reversal remain permanently visible in the ledger.
+Completed transactions are never edited or deleted. A supervisor issues a **reversing transaction**
+carrying `reverses_transaction_id` and a reason; it writes equal and opposite movements, and the
+original moves to status `reversed`. Both remain permanently visible in the ledger.
+
+Two rules keep consumption analytics correct under reversal:
+
+- **Reversing movements keep the original `movement_type`.** A reversed withdrawal writes a `+qty`
+  movement of type `withdrawal`, so the withdrawals-only consumption sum nets to zero with no special
+  case in any report.
+- **Reversing movements carry the original transaction's `occurred_at`.** Otherwise a withdrawal on
+  30 January reversed on 2 February shows +15 consumption in January and −15 in February. Their
+  `balance_after` is still stamped in recording order, per §4.5 — the same treatment as a backdated
+  entry.
+
+Not reversible: `opening` transactions, reversing transactions themselves, and adjustments produced by
+an override (§5.3) or a count posting (§5.6) — those are corrected by a new adjustment or a count.
+Reversing a withdrawal that carried an override reverses only the withdrawal; the override adjustment
+stands, because the stock was physically present.
 
 ### 5.6 Physical counting (fills the §6 gap)
 
@@ -801,8 +849,22 @@ the classification is:
 ### 6.4 Movement classification
 
 Fast-moving, slow-moving and dead-stock thresholds are **settings, not constants**, because the right
-cut-off differs by storeroom and will be tuned during proposal Phase 6. Defaults: fast = top 20% by
-quantity withdrawn in the window; slow = no withdrawal in 90 days; dead = no withdrawal in 12 months.
+cut-off differs by storeroom and will be tuned during proposal Phase 6.
+
+**Ranking is by number of withdrawal events, not quantity withdrawn.** Quantities are in different
+units — ranking by quantity would put 400 metres of cable ahead of the bearing withdrawn every shift,
+because it adds metres to pieces. Event count is unit-independent.
+
+Defaults, applied in this order, first match wins:
+
+1. **Dead stock** — no withdrawal in 12 months
+2. **Slow-moving** — no withdrawal in 90 days
+3. **Fast-moving** — at least one withdrawal in the window, and in the top 20% of classified parts by
+   withdrawal event count
+4. **Normal** — everything else
+
+A part is **not classified** until 90 days after its first movement. Without this, every part
+imported at go-live is "slow-moving" on day one.
 
 *Deferred to v2:* `ROP = (ADC × lead_time_days) + safety_stock`, with safety stock derived from
 demand variability. `parts.lead_time_days` is captured now so the data exists when that model lands.
@@ -820,11 +882,25 @@ for performance that is not yet needed.
 
 | Alert | Condition |
 |---|---|
-| Low stock | `on_hand <= min_level` |
-| Critical stock | `on_hand <= critical_level` |
-| Replenishment | `on_hand <= reorder_point`, with consumption history in the alert context |
-| High consumption | 30-day consumption > baseline ADC × multiplier (default 2.0) **and** at least 3 withdrawal events — the event floor suppresses noise from near-zero baselines |
-| Inventory discrepancy | Count variance beyond tolerance, or a §5.3 override |
+| Low stock | `on_hand <= min_level` (only when `min_level > 0`) |
+| Critical stock | `on_hand <= critical_level` (only when `critical_level > 0`), **or** `criticality = 'critical'` and `on_hand = 0` |
+| Replenishment | `on_hand <= reorder_point` (only when `reorder_point > 0`), with consumption history in the alert context |
+| High consumption | `consumption_last_30d > (baseline_ADC × 30) × multiplier` (default 2.0) **and** ≥ 3 withdrawal events in the last 30 days **and** ≥ 60 days of baseline history |
+| Inventory discrepancy | A count session marked counted with a variance beyond tolerance, or a §5.3 override. Resolved when the part's count is posted |
+
+**High consumption, precisely.** `baseline_ADC` is average daily consumption over the analysis window
+*excluding the most recent 30 days*. Two errors are avoided: comparing a 30-day total directly
+against a daily rate (a unit mismatch that fires on almost every active part), and letting the spike
+being detected inflate its own baseline.
+
+**Level thresholds of zero are "not set".** Level columns default to 0, so without the `> 0` guard
+every unconfigured part at zero stock would raise three alerts the moment the Excel import lands. The
+exception is deliberate: a part classified critical at zero stock always alerts.
+
+**At most one stock-level alert per part.** Critical, low and replenishment are nested conditions — a
+part at its critical level satisfies all three. The evaluator keeps only the most severe open; when the
+balance crosses a level it resolves the current one and opens the new one. History is preserved, and
+a worsening condition requires fresh acknowledgement.
 
 **`critical_level` and `criticality` are separate fields and must stay separate.** `critical_level` is
 a quantity threshold; `criticality` is a classification (critical / important / normal). §3B and §6
@@ -904,7 +980,7 @@ architecture (§3.2) becomes worth its cost.
 
 ## 9. Reports (proposal §7 A–H)
 
-All eight, each implemented as a filtered query plus a Livewire view plus CSV/XLSX and PDF export,
+All ten (A–J), each implemented as a filtered query plus a Livewire view plus CSV/XLSX and PDF export,
 over one shared filter component and one shared export pipeline.
 
 | | Report | Primary source | Key filters |
@@ -918,6 +994,10 @@ over one shared filter component and one shared export pipeline.
 | G | Personnel Withdrawal History | withdrawals by `personnel_id` | personnel, date range |
 | H | Equipment Consumption | withdrawals by `equipment_id` | equipment, date range |
 | **I** | **Replenishment Report** | `stock_movements` (replenishments) | date range, part, supplier, reference |
+| **J** | **Exceptions Report** | `stock_transactions` flagged backdated / manual identification / override, plus reversals and adjustments | date range, exception type, user |
+
+Report J is an addition: overrides, manual identifications and backdated entries each bypass part of
+the normal control, so supervisors need one place to review all of them.
 
 ### 9.1 Report I is not in §7 — and needs to be
 
@@ -1079,7 +1159,7 @@ data, not merely in CI.
 | Proposal phase | Engineering work |
 |---|---|
 | **1 — Inventory assessment** | Excel data audit; agree the CSV import contract; min/max and criticality workshop; equipment register; badge technology confirmed |
-| **2 — System development** | **M1** schema, ledger, auth, RBAC · **M2** withdrawal flow end to end · **M3** replenishment, adjustments, importer · **M4** analytics, alerts, dashboard · **M5** the eight reports and exports · **M6** counting, backup job, backdated entry |
+| **2 — System development** | **M1** schema, ledger, auth, RBAC · **M2** withdrawal flow end to end · **M3** replenishment, adjustments, importer · **M4** analytics, alerts, dashboard · **M5** the ten reports (A–J) and exports · **M6** counting, backup job, backdated entry |
 | **3 — Hardware installation** | Reader procurement and acceptance test; workstation and UPS; location labelling; network |
 | **4 — Data migration and testing** | Import with dry-run; full physical verification count; UAT against §4 and §7; **backup restore drill**; concurrency and invariant suites green |
 | **5 — Implementation and training** | Custodian training (all shifts); requestor briefing; **two-week parallel run with paper**; go-live |
@@ -1091,7 +1171,7 @@ data, not merely in CI.
 
 | Proposal | Requirement | Where it lands |
 |---|---|---|
-| §2 | All twelve objectives | Covered across §4–§9; accountability enforced by the `committed_withdrawal_is_attributed` constraint (§4.3) |
+| §2 | All twelve objectives | Covered across §4–§9; accountability enforced by the `completed_withdrawal_is_attributed` constraint (§4.3) |
 | §3A | Custodian duties | `custodian` role (§3.4); counting (§5.6); replenishment (§5.4) |
 | §3B | All 12 database fields | `parts`, `part_stock`, `stock_movements` (§4.3). "Equipment/application" → `part_equipment`; "Depletion rate" and the two history fields are derived from the ledger, not stored columns |
 | §3B | All 19 software functions | §5 workflows, §6 analytics, §7 alerts, §9 reports (incl. Report I and the dashboard) |
@@ -1103,7 +1183,7 @@ data, not merely in CI.
 | §5 | `Avg Monthly Consumption = Qty ÷ Months` | §6.1, implemented verbatim |
 | §5 | Min/max, safety stock, reorder point | §4.4, with the ambiguity between them resolved |
 | §6 | 5 alert types | §7 |
-| §7 | Reports A–H | §9, all eight, **plus Report I** for the §3B replenishment report §7 omits (§9.1) |
+| §7 | Reports A–H | §9, all eight, **plus Report I** for the §3B replenishment report §7 omits (§9.1) and **Report J** for exceptions |
 | §11 Phase 1 | "Classify parts according to equipment" | `part_equipment` (§4.3) |
 | §8 | Hardware | §10 |
 | §9 | Architecture flow | §3.1, §5.1 |
@@ -1129,6 +1209,11 @@ data, not merely in CI.
 ---
 
 ## 16. Open questions for the client
+
+> **Superseded by PRD Appendix A** (`docs/prd/Microtech_SPIMS_PRD_v0.1.0.md`), which carries these
+> ten questions forward and adds six more — supervisor availability on night shifts, manual
+> identification, returns of unused parts, immediate critical-stock email, application hosting, and
+> success-measure targets — each tagged with owner and whether it blocks. Maintain the list there.
 
 1. **Badge technology** — are existing Microtech employee IDs to be reused, and if so are they
    125 kHz proximity, 13.56 MHz MIFARE, or barcode? Determines reader procurement (§10) and how §8.1
@@ -1164,3 +1249,7 @@ data, not merely in CI.
 | Insufficient-stock override | In scope, via attributed adjustment | 2026-09-12 |
 | Paper fallback / backdated entry | In scope for v1 | 2026-09-12 |
 | Backups | Self-managed nightly `pg_dump` off-platform | 2026-09-12 |
+| Status vocabulary | `draft / completed / cancelled / reversed`, aligned to Kora terminology in the PRD | 2026-09-13 |
+| Manual personnel identification | Supervisor-authorised fallback when a badge is missing or the reader fails; pending client confirmation | 2026-09-13 |
+| Movement class ranking | By withdrawal event count, not quantity (units are not comparable) | 2026-09-13 |
+| Reversal dating | Reversing movements keep original type and `occurred_at` | 2026-09-13 |
