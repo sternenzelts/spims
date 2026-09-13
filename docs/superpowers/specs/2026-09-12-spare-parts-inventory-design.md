@@ -2,8 +2,11 @@
 
 | | |
 |---|---|
-| **Client** | Microtech |
-| **Source proposal** | *Project Proposal: Spare Parts Inventory Management System*, Engr. Jabez J. Agaya |
+| **Product owner** | Microtech Industrial Solutions, Inc. |
+| **First installs** | Microtech production storeroom · Microtech demo |
+| **Deployment model** | One install per company — separate application and database (§3.6) |
+| **Source proposal** | *Project Proposal: Spare Parts Inventory Management System*, Engr. Jabez J. Agaya — prepared by Microtech for a customer |
+| **Requirements** | PRD: `docs/prd/Microtech_SPIMS_PRD_v0.1.0.md` |
 | **Document status** | Draft for review |
 | **Date** | 2026-09-12 |
 | **Stack** | Laravel 12 (PHP 8.3) · Livewire 3 · Tailwind · Supabase Postgres (free tier) |
@@ -13,8 +16,10 @@
 
 ## 1. Executive summary
 
-This document translates the Microtech spare parts proposal into a buildable system design. It is a
-web-hosted, single-tenant application operated by a 24/7 Inventory Custodian, in which every
+This document translates the spare parts proposal Microtech prepared for a customer into a buildable
+system design. SPIMS is a **Microtech-owned product**: built once and installed separately for each
+company, starting with Microtech's own storeroom and a demo install used to show it to customers
+(§3.6). Each install is a web-hosted application operated by a 24/7 Inventory Custodian, in which every
 movement of stock is recorded as an immutable ledger entry attributed to both the custodian who
 processed it and the personnel who received the parts.
 
@@ -48,7 +53,8 @@ withdrawal with scan-last commit · replenishment receipts · stock adjustments 
 counting with variance posting · Excel/CSV part and opening-balance import · consumption and
 depletion analytics · five alert types · the eight reports of proposal §7 plus Replenishment (I) and Exceptions (J) · role-based access
 control · dual audit trail (stock ledger + configuration changes) · paper-fallback backdated entry ·
-nightly off-platform database backup.
+nightly off-platform database backup · per-install settings (company profile, time zone, currency,
+withdrawal purposes, transaction prefixes, thresholds) · sample data loading for demo installs.
 
 ### 2.2 Explicitly deferred (v2+)
 
@@ -62,12 +68,12 @@ and re-record; PRD Appendix A Q13 decides whether this moves into v1).
 
 | Assumption | Basis |
 |---|---|
-| Single tenant (Microtech only) | Proposal describes one storeroom |
+| Single-tenant per install; one install per company | Product decision 2026-09-13; see §3.6 |
 | One withdrawal station initially, designed for more | Client answer; §3B says "a dedicated computer workstation" |
 | HID keyboard-wedge ID reader | Hardware not yet purchased; see §10 |
 | Existing part data arrives as Excel/CSV | Client answer; drives importer into v1 |
 | One storage location per part | §3B lists "storage location" as a part attribute |
-| Timezone Asia/Manila; all timestamps stored `timestamptz` in UTC | Philippine operation |
+| Time zone is an install setting, default Asia/Manila; all timestamps stored `timestamptz` in UTC | Philippine operation first; other companies may differ |
 | Quantities are decimal, not integer | Bearings are whole units; oil, cable and wire are not |
 
 ---
@@ -166,6 +172,51 @@ This distinction runs through the entire data model and must not be collapsed:
 | Logs in? | Yes, for a whole shift | **Never** |
 | Role in a withdrawal | Processes it (`custodian_user_id`) | Receives the parts (`personnel_id`) |
 
+### 3.6 Deployment model: one install per company
+
+SPIMS is a Microtech product. It is built once and **installed separately for each company**: every
+install is its own Laravel application instance with its own Postgres database, file storage, users
+and settings. Microtech runs the first two installs — **production**, for its own storeroom, and
+**demo**, holding sample data for showing SPIMS to customers.
+
+**Why not one shared multi-company system.** A shared system puts `company_id` on every row and every
+query, and a single missed filter in a report or export shows one company's stock and personnel to
+another. Large industrial customers' IT and security teams commonly refuse shared hosting of their
+data regardless, and some will require installs on their own infrastructure. Retrofitting shared
+hosting later means rewriting the data layer, so the decision is recorded here: **the schema has no
+company scoping, deliberately.**
+
+Five rules follow, and each constrains the code, not just the deployment:
+
+1. **No company-specific values in code.** Company name and logo, time zone, currency, withdrawal
+   purposes, transaction number prefixes and thresholds live in `settings` and
+   `withdrawal_purposes` (§4.3). The proposal's purpose list is seed data, not a `CHECK` constraint.
+2. **Plain Postgres only.** No Supabase Auth, and no application logic that depends on RLS, Realtime,
+   Edge Functions or PostgREST. Supabase is a Postgres host for Microtech's installs; a customer
+   install must run unchanged on RDS, Cloud SQL, Azure Database or on-premises Postgres.
+3. **Files through Laravel's filesystem abstraction.** Photos and exports go to a configured disk —
+   S3-compatible (Supabase Storage, AWS S3, MinIO) or local — chosen by environment configuration.
+4. **One codebase, one release line.** Every install runs a tagged release; migrations run per
+   install. No per-customer branches. A customer request becomes a product feature for every install
+   (behind a setting if it must differ) or is declined. Forked installs cannot be upgraded together
+   and quickly become separate products to maintain.
+5. **Demo and production are separate installs.** `APP_INSTALL_TYPE=demo|production` is set in
+   environment configuration — not in the database, not in the UI. The sample-data seeder refuses to
+   run unless it is `demo`, and a demo install shows a banner on every screen and export.
+
+**Provisioning a new install** — the repeatable checklist run for every company, and what the
+fresh-install test in §13.5 proves:
+
+1. Create the Postgres database and file storage; set environment configuration
+2. Run migrations against the empty database
+3. Seed default settings and the default withdrawal purpose list
+4. Create the first System Administrator
+5. Set company profile, time zone and currency
+6. Create storage locations and the equipment register
+7. Import spare parts, then opening balances — dry run first
+8. Register personnel and enroll badges
+9. Configure the nightly off-platform backup and complete one test restore
+
 ---
 
 ## 4. Data model
@@ -193,7 +244,9 @@ Three consequences designed in deliberately:
 Per Supabase Postgres guidance: `bigint generated always as identity` primary keys (sequential, no
 index fragmentation); `text` rather than `varchar(n)`; `timestamptz` never bare `timestamp`;
 `numeric` for all quantities and money; `text` + `CHECK` rather than Postgres enums (enum values
-cannot be altered transactionally); every foreign key column explicitly indexed.
+cannot be altered transactionally); foreign key columns used in joins, filters and lookups explicitly
+indexed. User-reference audit columns such as `reversed_by_user_id` are not indexed — users are never
+deleted and those columns are not queried by.
 
 ### 4.3 Schema
 
@@ -289,6 +342,21 @@ create table personnel (
   updated_at           timestamptz not null default now()
 );
 
+-- Withdrawal purposes differ between companies, so they are rows, not a CHECK constraint (§3.6).
+-- Seeded in every install with the proposal's list: Preventive Maintenance, Corrective
+-- Maintenance, Breakdown Repair, Machine Modification, Replacement of Worn Part, and
+-- Other Maintenance Activity (requires_remarks = true).
+create table withdrawal_purposes (
+  id               bigint generated always as identity primary key,
+  code             text not null unique,     -- stable identifier; never changed once used
+  name             text not null unique,     -- display name; may be renamed
+  requires_remarks boolean not null default false,
+  sort_order       integer not null default 0,
+  is_active        boolean not null default true,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
 -- ─────────────────────── Transactions and ledger ───────────────────────
 
 create table stock_transactions (
@@ -304,9 +372,7 @@ create table stock_transactions (
   custodian_user_id       bigint not null references users(id),
   personnel_id            bigint references personnel(id),
   equipment_id            bigint references equipment(id),
-  purpose                 text check (purpose in (
-                            'preventive_maintenance','corrective_maintenance','breakdown_repair',
-                            'machine_modification','worn_part_replacement','other')),
+  purpose_id              bigint references withdrawal_purposes(id),
   supplier                text,
   reference_no            text,        -- DR / PO number for replenishment
   reason_code             text check (reason_code in ('miscount','damage','unrecorded_issue',
@@ -334,7 +400,7 @@ create table stock_transactions (
   -- original for reporting, but nobody was identified at the counter when they were made.
   constraint completed_withdrawal_is_attributed check (
     not (status = 'completed' and type = 'withdrawal' and reverses_transaction_id is null)
-    or (personnel_id is not null and equipment_id is not null and purpose is not null
+    or (personnel_id is not null and equipment_id is not null and purpose_id is not null
         and identification_method is not null)
   ),
   constraint completed_has_recorded_at check (
@@ -363,6 +429,12 @@ create index stock_transactions_occurred_idx    on stock_transactions (occurred_
 create index stock_transactions_personnel_idx   on stock_transactions (personnel_id);
 create index stock_transactions_equipment_idx   on stock_transactions (equipment_id);
 create index stock_transactions_custodian_idx   on stock_transactions (custodian_user_id);
+create index stock_transactions_purpose_idx     on stock_transactions (purpose_id);
+
+-- Indexes the reversal lookup and enforces "a transaction can be reversed only once".
+create unique index stock_transactions_reverses_key
+  on stock_transactions (reverses_transaction_id)
+  where reverses_transaction_id is not null;
 
 create table stock_transaction_lines (
   id                   bigint generated always as identity primary key,
@@ -371,7 +443,7 @@ create table stock_transaction_lines (
   part_id              bigint not null references parts(id),
   quantity             numeric(14,3) not null check (quantity > 0),
   equipment_id         bigint references equipment(id),   -- per-line override of the header
-  purpose              text,                              -- per-line override of the header
+  purpose_id           bigint references withdrawal_purposes(id), -- per-line override of the header
   unit_cost            numeric(14,4),                     -- replenishment only
   remarks              text,
   unique (stock_transaction_id, line_no),
@@ -394,7 +466,7 @@ create table stock_movements (
   recorded_at               timestamptz not null default now(),
   personnel_id              bigint references personnel(id),
   equipment_id              bigint references equipment(id),
-  purpose                   text,
+  purpose_id                bigint references withdrawal_purposes(id),
   custodian_user_id         bigint not null references users(id),
   created_at                timestamptz not null default now()
 );
@@ -404,6 +476,7 @@ create index stock_movements_occurred_idx      on stock_movements (occurred_at d
 create index stock_movements_personnel_idx     on stock_movements (personnel_id, occurred_at desc);
 create index stock_movements_equipment_idx     on stock_movements (equipment_id, occurred_at desc);
 create index stock_movements_txn_idx           on stock_movements (stock_transaction_id);
+create index stock_movements_purpose_idx       on stock_movements (purpose_id);
 
 -- Every consumption, depletion and monthly report filters on withdrawals only.
 -- A partial index keeps that hot path off the replenishment and adjustment rows.
@@ -510,6 +583,12 @@ create table audit_logs (
 create index audit_logs_auditable_idx on audit_logs (auditable_type, auditable_id, created_at desc);
 create index audit_logs_user_idx      on audit_logs (user_id, created_at desc);
 
+-- Per-install configuration (§3.6). Keys: company.name, company.logo_path, company.address,
+-- regional.timezone, regional.currency, numbering.prefixes, analysis.window_months,
+-- movement_class.*, alerts.high_consumption.*, withdrawal.identification_timeout_seconds,
+-- backdating.limit_days, counting.default_tolerance_pct, notifications.*
+-- The install type (demo | production) is deliberately NOT here: it is environment
+-- configuration, so it cannot be changed by anyone with database or admin UI access.
 create table settings (
   key                text primary key,
   value              jsonb not null,
@@ -1048,18 +1127,21 @@ and labels for storage locations.
 
 ## 11. Supabase free tier: constraints and mitigations
 
-The client has selected the free tier. Recorded here with the compensating controls built into v1.
+Microtech has selected the free tier for its own two installs, production and demo. Each customer
+install is hosted per customer (§3.6, PRD Appendix A Q17). Limits below were verified against
+Supabase's pricing page and platform docs on 2026-09-13.
 
 | Constraint | Impact | Mitigation (v1 scope) |
 |---|---|---|
 | **No automated backups** | Highest risk on the tier. This is a system of record. | **Nightly `pg_dump` via the Laravel scheduler to an off-platform destination** (office NAS, Google Drive or S3 — *not* Supabase Storage, which shares the failure domain). Retain 30 daily and 12 monthly. Restore drill during Phase 4 UAT. |
-| **Project pauses after ~7 days inactivity** | Daily storeroom use prevents it; a build or pilot gap could trip it. | Daily scheduler heartbeat touching the database. |
+| **Project pauses after 1 week of low activity** | Daily storeroom use keeps production active. **The demo install is the real exposure**: it can sit unused between customer demonstrations and be paused exactly when it is needed. | Daily scheduler heartbeat on both installs — Supabase states a few database requests a day is enough. A paused project can be resumed from the dashboard within 90 days. |
+| **2 active free projects** | Microtech production and demo use the whole allowance. A staging environment, or hosting a customer install on Microtech's account, requires Pro (from $25/month, which includes 7 days of daily backups). | Develop and test against local Postgres, which does not count. Decide customer hosting before the first customer install. |
 | **Lower connection limits** | Direct connections exhaust quickly. | Transaction-mode pooler, mandatory (§12.1). |
 | **No SLA** | Sharpens the §8.4 availability risk. | Paper fallback and backdated entry, already in scope. |
 | **500 MB database** | **Not a practical constraint.** At 50 withdrawal lines/day the ledger grows roughly 6 MB/year including indexes; even at 500 lines/day there is multi-year headroom. | Monitor; revisit only if volume is an order of magnitude above estimate. |
 | **1 GB storage, 5 GB egress/month** | Part photos and generated exports accumulate. | Exports expire after 7 days; part photos resized on upload. |
 
-**Upgrade trigger to state to the client:** if the restore drill in Phase 4 shows an unacceptable
+**Upgrade trigger:** if the restore drill in Phase 4 shows an unacceptable
 recovery point, or if the business decides it cannot tolerate self-managed backups, the Pro tier with
 daily backups and PITR is the remedy. The decision is theirs; the design functions on free tier with
 the `pg_dump` job in place.
@@ -1152,6 +1234,18 @@ data, not merely in CI.
 - **End-to-end** — the full scan-last withdrawal flow in a browser, simulating the keyboard-wedge
   reader as keystrokes terminated by Enter.
 
+### 13.5 Install tests
+
+These prove the §3.6 rules hold, so a customer install never depends on manual database work:
+
+- **Fresh install** — CI creates an empty plain Postgres database (not Supabase), runs all
+  migrations and the default seed, creates an administrator, and runs the smoke suite. If this
+  passes, the provisioning checklist works without hand-written SQL.
+- **Seeder guard** — the sample-data seeder aborts when `APP_INSTALL_TYPE=production`.
+- **No hard-coded company values** — a test switches time zone, currency, transaction prefixes and
+  the purpose list through settings, then asserts that transaction numbers, consumption periods and
+  report headers follow them.
+
 ---
 
 ## 14. Delivery phases (mapped to proposal §11)
@@ -1164,6 +1258,10 @@ data, not merely in CI.
 | **4 — Data migration and testing** | Import with dry-run; full physical verification count; UAT against §4 and §7; **backup restore drill**; concurrency and invariant suites green |
 | **5 — Implementation and training** | Custodian training (all shifts); requestor briefing; **two-week parallel run with paper**; go-live |
 | **6 — Continuous improvement** | Threshold tuning from real consumption; lead-time reorder model; rollup tables if warranted; offline PWA evaluation |
+| **Each customer install** | Repeat Phases 1, 3, 4 and 5 for that customer using the §3.6 provisioning checklist. No development phase unless a request is accepted as a product feature for every install |
+
+Phases 1–6 run first for Microtech's production install. The demo install is provisioned alongside it
+in Phase 4 and loaded with sample data rather than real data.
 
 ---
 
@@ -1211,9 +1309,10 @@ data, not merely in CI.
 ## 16. Open questions for the client
 
 > **Superseded by PRD Appendix A** (`docs/prd/Microtech_SPIMS_PRD_v0.1.0.md`), which carries these
-> ten questions forward and adds six more — supervisor availability on night shifts, manual
-> identification, returns of unused parts, immediate critical-stock email, application hosting, and
-> success-measure targets — each tagged with owner and whether it blocks. Maintain the list there.
+> ten questions forward and adds eight more — supervisor availability on night shifts, manual
+> identification, returns of unused parts, immediate critical-stock email, application hosting,
+> success-measure targets, default hosting for customer installs, and who owns the existing Excel
+> parts list — each tagged with owner and whether it blocks. Maintain the list there.
 
 1. **Badge technology** — are existing Microtech employee IDs to be reused, and if so are they
    125 kHz proximity, 13.56 MHz MIFARE, or barcode? Determines reader procurement (§10) and how §8.1
@@ -1253,3 +1352,6 @@ data, not merely in CI.
 | Manual personnel identification | Supervisor-authorised fallback when a badge is missing or the reader fails; pending client confirmation | 2026-09-13 |
 | Movement class ranking | By withdrawal event count, not quantity (units are not comparable) | 2026-09-13 |
 | Reversal dating | Reversing movements keep original type and `occurred_at` | 2026-09-13 |
+| Deployment model | One install per company (separate application and database); no shared multi-company hosting | 2026-09-13 |
+| Microtech installs | Production (own storeroom) and demo (sample data), kept separate | 2026-09-13 |
+| Withdrawal purposes | Per-install table seeded with the proposal's list, replacing the `CHECK` constraint | 2026-09-13 |

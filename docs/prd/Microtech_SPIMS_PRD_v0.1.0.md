@@ -13,7 +13,7 @@
 | Demo Status | Not Ready |
 | Deployment Status | Not Deployed |
 | Production Readiness | Not Assessed |
-| Product Notes | System design drafted and pending review. Sixteen questions for Microtech are open (Appendix A). |
+| Product Notes | Microtech-owned product. First installs: Microtech production storeroom and Microtech demo. Installed separately for each customer afterward. Open questions in Appendix A. |
 
 ## Document Information
 
@@ -24,8 +24,10 @@
 | Date | September 13, 2026 |
 | Status | Draft |
 | Owner | TBD |
-| Client | Microtech |
-| Source Proposal | Project Proposal: Spare Parts Inventory Management System — Engr. Jabez J. Agaya |
+| Product Owner | Microtech Industrial Solutions, Inc. |
+| First Installs | Microtech production storeroom; Microtech demo |
+| Deployment Model | One install per company, each with its own application and database |
+| Source Proposal | Project Proposal: Spare Parts Inventory Management System — Engr. Jabez J. Agaya, prepared by Microtech for a customer |
 | Related Documents | System Design: `docs/superpowers/specs/2026-09-12-spare-parts-inventory-design.md` |
 | Capability Type | Core Business Module |
 | Operational Role | Business Domain |
@@ -36,7 +38,8 @@
 | Classification | Confidential — for Microtech use only |
 
 > **Format note.** This document follows the KoraERP PRD structure. SPIMS is a standalone web
-> application deployed for Microtech, not a module inside the Kora platform. The platform services
+> application owned by Microtech Industrial Solutions, Inc. and installed separately for each company;
+> it is not a module inside the Kora platform. The platform services
 > the Kora template assumes — Auth Service, Audit Service, Notification Service, Document Service, and
 > Workflow Application Service — are provided inside SPIMS itself or replaced by their concrete
 > equivalents in Section 14. Implementation detail is kept in the System Design document.
@@ -47,8 +50,9 @@
 
 ### 1.1 Problem Statement
 
-Microtech needs a structured way to manage spare parts stock, withdrawals, replenishments, and
-consumption history.
+Industrial sites that run a spare parts storeroom — starting with Microtech's own, and including the
+customer the source proposal was prepared for — need a structured way to manage spare parts stock,
+withdrawals, replenishments, and consumption history.
 
 Without a dedicated spare parts inventory system, withdrawals may not be consistently attributed to a
 person, a machine, and a purpose, and stock records may drift from what is actually on the shelves.
@@ -63,12 +67,13 @@ This creates:
 - difficulty identifying fast-moving, slow-moving, excess, and obsolete stock
 
 Microtech needs a standalone Spare Parts Inventory Management System that owns spare part records,
-stock balances, stock movement history, and withdrawal accountability.
+stock balances, stock movement history, and withdrawal accountability, and that it can run in its own
+storeroom and install for customers without changing the software for each one.
 
 ### 1.2 Solution Overview
 
 The Spare Parts Inventory Management System (SPIMS) provides spare part, stock balance, withdrawal,
-and consumption management for Microtech's spare parts storeroom.
+and consumption management for industrial spare parts storerooms.
 
 It supports:
 
@@ -93,10 +98,15 @@ For MVP, SPIMS supports a complete native lifecycle from spare part request to a
 stock movement. There is no approval workflow. Supervisor authorization is required only for
 exceptions and corrections.
 
+SPIMS is built once and installed separately for each company. Each install has its own database and
+its own settings for company name, logo, time zone, currency, withdrawal purposes, and transaction
+number prefixes. Microtech runs two installs first: a production install for its own storeroom, and a
+demo install with sample data for showing SPIMS to customers.
+
 ### 1.3 Architectural Positioning
 
-SPIMS is a Core Business Module under Operations, deployed as a standalone web application for
-Microtech.
+SPIMS is a Core Business Module under Operations, deployed as a standalone web application with one
+install per company.
 
 It is the source of truth for spare part records, stock balances, and stock movements.
 
@@ -119,6 +129,7 @@ before the withdrawal is confirmed.
 - inventory alerts
 - dashboard, reports, and audit history
 - SPIMS user accounts and roles
+- install settings
 
 #### SPIMS Does Not Own
 
@@ -130,6 +141,7 @@ before the withdrawal is confirmed.
 - badge issuance and physical access control
 - database hosting infrastructure
 - email delivery infrastructure
+- customer contracts, licensing, and billing
 
 ---
 
@@ -144,6 +156,7 @@ before the withdrawal is confirmed.
 - Warn before critical and low-stock spare parts run out.
 - Measure consumption and depletion from actual withdrawal history.
 - Keep the storeroom operating during a SPIMS outage through paper fallback and backdated entry.
+- Serve every company from one product, with differences between companies handled through install settings rather than software changes.
 
 ### 2.2 MVP Goals
 
@@ -156,10 +169,13 @@ before the withdrawal is confirmed.
 - Raise and resolve the five alert types defined in the proposal.
 - Provide the dashboard and ten reports.
 - Audit every stock movement and every configuration change.
+- Configure an install for a company through install settings.
+- Load sample data into a demo install.
 
 ### 2.3 Success Measures
 
-Targets are proposed and pending confirmation by Microtech (Appendix A, Q16).
+Targets are proposed, pending confirmation by Microtech (Appendix A, Q16), and measured first at the
+Microtech production install.
 
 | Measure | Target | How Measured |
 |---|---|---|
@@ -171,6 +187,7 @@ Targets are proposed and pending confirmation by Microtech (Appendix A, Q16).
 | Manual personnel identifications | Under 2% of withdrawals per month | Report J |
 | Backdated transactions | Under 2% of transactions per month | Report J |
 | Time to produce the Monthly Consumption Report | Under 5 minutes | Timed; replaces manual consolidation |
+| Time to set up a new install, from an empty database to ready for data import | Under 1 working day, with no software changes | Timed when setting up the demo install and each customer install |
 
 ---
 
@@ -203,6 +220,8 @@ Targets are proposed and pending confirmation by Microtech (Appendix A, Q16).
 - audit history
 - nightly stock balance verification
 - nightly backup outside the hosting provider
+- install settings for company profile, time zone, currency, withdrawal purposes, and transaction number prefixes
+- sample data loading for demo installs
 
 ### 3.2 Out of Scope
 
@@ -222,6 +241,10 @@ Targets are proposed and pending confirmation by Microtech (Appendix A, Q16).
 - mobile application
 - configurable approval workflows
 - integration with ERP, maintenance management, or HR systems
+- one shared system hosting several companies
+- customer-specific software changes
+- customer self-service sign-up
+- licensing and billing of customer installs
 
 ---
 
@@ -233,12 +256,16 @@ Targets are proposed and pending confirmation by Microtech (Appendix A, Q16).
 | Requesting Personnel | Maintenance or production personnel who request and receive spare parts. Has no SPIMS account. Identified by ID/RFID badge scan at withdrawal confirmation. |
 | Inventory Supervisor | Authorizes exceptions and corrections: insufficient stock overrides, manual personnel identification, adjustments, reversals, and count posting. Registers personnel and enrolls badges. |
 | Inventory Planner | Sets stock levels and criticality, monitors consumption and depletion, and uses reports for replenishment planning. Also used by management for dashboard and reporting access. Read-only on transactions. |
-| System Administrator | Manages user accounts, roles, settings, and data imports. |
+| System Administrator | Manages user accounts, roles, install settings, and data imports for one install. |
+| Microtech Implementation Team | Sets up each install: configures install settings, imports spare parts and opening balances, registers personnel, loads sample data into demo installs, and trains users. Works through the System Administrator role. |
 | ID/RFID Badge Reader | Hardware at the withdrawal station that reads a personnel badge and passes its identifier to SPIMS. |
 | Purchasing | Outside SPIMS. Uses replenishment alerts and reports to raise purchase orders. |
 | System | Updates stock balances, records resulting balances, calculates consumption and depletion, evaluates alerts, verifies balances nightly, and runs nightly backups. |
 
 A user may hold more than one role.
+
+Each install serves one company. Users, personnel, spare parts, and stock in one install are not
+visible from any other install.
 
 ---
 
@@ -259,7 +286,8 @@ A user may hold more than one role.
 - inventory alerts
 - dashboard, list, detail, and report surfaces
 - audit history
-- SPIMS user accounts, roles, and settings
+- SPIMS user accounts and roles
+- install settings: company profile, time zone, currency, withdrawal purposes, transaction number prefixes, thresholds, and notification recipients
 
 ### 5.2 Module Does Not Own
 
@@ -273,6 +301,7 @@ A user may hold more than one role.
 - database hosting infrastructure
 - email delivery infrastructure
 - backup storage infrastructure
+- customer contracts, licensing, and billing
 
 ---
 
@@ -623,8 +652,8 @@ change stock balances.
 - Only Active spare parts can be added.
 - Each spare part can appear only once per withdrawal.
 - Equipment is required and must be Active.
-- Purpose is required and must be one of: Preventive Maintenance, Corrective Maintenance, Breakdown Repair, Machine Modification, Replacement of Worn Part, Other Maintenance Activity.
-- Remarks are required when the purpose is Other Maintenance Activity.
+- Purpose is required and must be an Active withdrawal purpose from the install settings (FR-SPIMS-018). The default list, taken from the proposal, is: Preventive Maintenance, Corrective Maintenance, Breakdown Repair, Machine Modification, Replacement of Worn Part, Other Maintenance Activity.
+- Remarks are required when the selected purpose is set to require remarks; by default, Other Maintenance Activity.
 - Draft withdrawals do not change stock balances.
 
 #### Postconditions
@@ -693,7 +722,7 @@ transaction.
 - A Completed withdrawal must record the personnel, custodian, equipment, and purpose.
 - Manual identification requires Inventory Supervisor authorization and a reason.
 - Every withdrawn line must create a stock movement that records the resulting inventory balance.
-- Transaction numbers are sequential, unique, and prefixed by transaction type, for example WD-2026-000123.
+- Transaction numbers are sequential, unique, and prefixed by transaction type using the prefixes in the install settings, for example WD-2026-000123.
 - Completed withdrawals cannot be edited; corrections use FR-SPIMS-011.
 - Confirmation must be audit logged.
 
@@ -826,7 +855,7 @@ A replenishment increases stock balances and records a stock movement for each s
 - Supplier is required.
 - Delivery receipt or purchase order reference is required.
 - Date received is required and cannot be in the future.
-- Unit cost, where entered, must be zero or greater.
+- Unit cost, where entered, must be zero or greater and is recorded in the install's currency.
 - Each spare part can appear only once per replenishment.
 - Every line must create a stock movement that records the resulting inventory balance.
 - Replenishments must be audit logged.
@@ -1123,7 +1152,7 @@ of Months.
 - Consumption counts withdrawal stock movements only; replenishments, adjustments, count variances, and opening balances are excluded.
 - Reversed withdrawals are excluded from consumption.
 - Consumption is assigned to the date the withdrawal took place, including backdated withdrawals.
-- Daily, weekly, and monthly periods use Philippine Standard Time.
+- Daily, weekly, and monthly periods use the install's time zone, which defaults to Philippine Standard Time.
 - The analysis window defaults to the most recent 6 months and is configurable.
 - Average Monthly Consumption = Total Quantity Withdrawn ÷ Number of Months in the window.
 - Average Daily Consumption = Total Quantity Withdrawn ÷ Number of Days in the window.
@@ -1312,6 +1341,7 @@ and shall generate the ten reports listed in Section 11.2 with Excel, CSV, and P
 - Period filters use the date and time transactions took place.
 - Badge identifiers are masked in every report.
 - Prepared export files are available to download for 7 days.
+- Report headers and exported files show the company name and logo from the install settings.
 - Report exports must be audit logged.
 
 #### Postconditions
@@ -1319,6 +1349,117 @@ and shall generate the ten reports listed in Section 11.2 with Excel, CSV, and P
 - User views the dashboard or report.
 - Export file is produced where requested.
 - No stock balance is changed.
+
+### FR-SPIMS-018: Configure Install Settings
+
+#### Description
+
+The system shall allow a System Administrator to configure the settings that differ between
+companies, so the same SPIMS software can be installed for Microtech and for each customer without
+software changes.
+
+| Setting Group | Settings |
+|---|---|
+| Company Profile | Company name, logo, and address shown on screens, reports, and exported files |
+| Regional | Time zone, which defaults to Philippine Standard Time, and currency for unit cost |
+| Withdrawal Purposes | Purposes offered on withdrawals, whether each requires remarks, and whether each is Active |
+| Transaction Numbering | Prefix for each transaction type; defaults are WD, RP, AJ, and OP |
+| Thresholds | Analysis window, movement class thresholds, High Consumption multiplier and minimum withdrawals, identification time limit, backdating limit, and default count tolerance |
+| Notifications | Recipients of the daily alert and exceptions summaries, and whether individual alert emails are on for each alert type |
+
+#### Actors
+
+- System Administrator
+- Microtech Implementation Team, through the System Administrator role
+
+#### Preconditions
+
+- User is signed in.
+- User has permission to configure install settings.
+
+#### Main Flow
+
+1. User opens Install Settings.
+2. System displays the current settings, with defaults for settings not yet changed.
+3. User changes one or more settings.
+4. System validates the changes.
+5. System saves the settings.
+6. System applies the settings to new transactions, calculations, reports, and notifications.
+7. System records an audit event with old and new values.
+
+#### Alternate Flows
+
+- If the company name has not been set, the system shows a setup prompt to System Administrators and blocks stock transactions until it is set.
+- If a withdrawal purpose has been used on a transaction, the user cannot delete it; the user can rename it or set it to Inactive, and past transactions keep their link to it.
+- If the user changes the time zone after transactions exist, the system warns that daily, weekly, and monthly figures will be regrouped and requires confirmation.
+- If the user changes a transaction number prefix, new transactions use the new prefix and existing transaction numbers do not change.
+- If the user changes the currency after unit costs have been recorded, the system warns that existing unit costs are not converted and requires confirmation.
+- If the user lacks permission, the system denies the action.
+
+#### Validation Rules
+
+- Company name is required before the install can record stock transactions.
+- At least one withdrawal purpose must be Active.
+- Withdrawal purpose names must be unique.
+- Transaction number prefixes must be unique across transaction types and contain letters only.
+- Threshold values must be greater than zero, except the default count tolerance, which may be zero.
+- Settings apply only to the install they are set in.
+- Settings changes must be audit logged with old and new values.
+
+#### Postconditions
+
+- Settings are saved and applied.
+- Audit event is recorded.
+
+### FR-SPIMS-019: Load Sample Data
+
+#### Description
+
+The system shall allow a System Administrator to load sample spare parts, storage locations,
+equipment, personnel, and transaction history into a demo install, so SPIMS can be shown to customers
+with realistic activity.
+
+Sample data is for demo installs only and must never enter an install that holds a company's real
+data.
+
+#### Actors
+
+- System Administrator
+- Microtech Implementation Team, through the System Administrator role
+
+#### Preconditions
+
+- The install was designated as a demo install when it was set up.
+- User has permission to load sample data.
+
+#### Main Flow
+
+1. User opens Sample Data.
+2. System confirms that the install is a demo install.
+3. User selects Load Sample Data.
+4. System loads sample spare parts, storage locations, equipment, personnel with sample badges, and several months of sample withdrawals, replenishments, adjustments, and counts.
+5. System calculates consumption, depletion, and alerts from the sample history.
+6. System records an audit event.
+
+#### Alternate Flows
+
+- If the install is a production install, the system does not offer sample data loading.
+- If the demo install already contains data, the user may reset it after confirmation; the system removes all data and loads the sample data again.
+- If the user lacks permission, the system denies the action.
+
+#### Validation Rules
+
+- An install is designated as demo or production when it is set up, and the designation cannot be changed from within SPIMS.
+- Sample data can be loaded or reset only in a demo install.
+- Resetting a demo install is the only action in SPIMS that removes stock movements.
+- Sample personnel use fictional names.
+- A demo install shows a Demo label on every screen and on every exported report.
+- Loading and resetting sample data must be audit logged.
+
+#### Postconditions
+
+- Demo install contains sample data with calculated consumption, depletion, and alerts.
+- Audit event is recorded.
 
 ---
 
@@ -1410,6 +1551,7 @@ A transaction may also carry these markers, which are not statuses:
 - Supervisor authorization for an exception is given while the transaction is Draft.
 - Changing a Draft withdrawal after the badge scan clears the personnel identification.
 - Spare parts, personnel, equipment, and storage locations with history are set to Inactive, never deleted.
+- Stock movements are removed only when a demo install is reset (FR-SPIMS-019).
 
 ---
 
@@ -1441,7 +1583,9 @@ A transaction may also carry these markers, which are not statuses:
 | View Dashboard | Yes | Yes | Yes | Yes |
 | View and Export Reports | Conditional | Yes | Yes | Yes |
 | View Audit History | No | Yes | Conditional | Yes |
-| Manage Users, Roles, and Settings | No | No | No | Yes |
+| Manage Users and Roles | No | No | No | Yes |
+| Configure Install Settings | No | No | No | Yes |
+| Load or Reset Sample Data, Demo Installs Only | No | No | No | Yes |
 
 Conditional access:
 
@@ -1485,12 +1629,14 @@ SPIMS should audit:
 - alert acknowledgement
 - report exports
 - user sign-in, failed sign-in, and role changes
-- settings changes
+- install settings changes
+- sample data loading and demo install reset
 
 ### 9.2 Governance Rules
 
 - SPIMS is the source of truth for spare part stock balances and stock movements.
-- Stock movement history is the inventory audit trail. Stock movement records are never edited or deleted.
+- Stock movement history is the inventory audit trail. Stock movement records are never edited or deleted. The only exception is resetting a demo install, which holds no real data (FR-SPIMS-019).
+- Each install holds one company's data only. No data is shared between installs.
 - Each stock balance must equal the total of that spare part's stock movements. The system verifies this nightly and notifies System Administrators of any difference.
 - Every withdrawal must be attributed to requesting personnel, custodian, equipment, and purpose.
 - Every adjustment, override, reversal, backdated entry, and manual identification must carry a reason.
@@ -1517,7 +1663,7 @@ SPIMS should audit:
 
 - SPIMS decides when notifications are needed.
 - The email delivery service delivers email notifications.
-- Recipients of each summary are configured by role.
+- Recipients of each summary are configured in the install settings (FR-SPIMS-018).
 - Alerts are notified once, when opened, through the daily summary.
 - Individual alert emails are off by default and can be turned on per alert type. Whether Critical Stock alerts email immediately is pending confirmation by Microtech (Appendix A, Q14).
 - Notifications link to the related spare part, transaction, count session, or alert.
@@ -1678,6 +1824,15 @@ Mobile and tablet support should prioritize:
 - dashboard and alerts for supervisors and planners
 - counted quantity entry on a tablet during physical counts
 
+### 12.8 Install Settings Screen
+
+The install settings screen should support:
+
+- settings grouped as listed in FR-SPIMS-018
+- a setup checklist for a new install: company profile, withdrawal purposes, storage locations, equipment, spare part import, opening balances, personnel and badges, and backup confirmation
+- defaults shown for settings not yet changed
+- a visible Demo or Production label for the install
+
 ---
 
 ## 13. Non-Functional Requirements
@@ -1692,7 +1847,7 @@ recorded as a stock movement.
 
 Quantities must be stored and calculated to three decimal places without rounding error. Consumption
 and depletion figures must follow the formulas in FR-SPIMS-014, and daily, weekly, and monthly periods
-must use Philippine Standard Time.
+must use the install's time zone.
 
 ### NFR-SPIMS-003: Auditability
 
@@ -1720,10 +1875,12 @@ the available stock.
 
 ### NFR-SPIMS-007: Availability and Continuity
 
-SPIMS is hosted online on a database tier with no uptime guarantee. The storeroom must be able to
+Microtech's installs are hosted online on a database tier with no uptime guarantee, and customer
+installs may be hosted differently. The storeroom must be able to
 continue issuing spare parts during an outage using the paper fallback form, with transactions entered
 afterward through FR-SPIMS-012. Draft withdrawals must survive brief connection interruptions. Scheduled
-daily activity must keep the hosted database from pausing.
+daily activity must keep a free-tier database from pausing, including on the demo install, which may
+go unused between customer demonstrations.
 
 ### NFR-SPIMS-008: Backup, Recovery, and Retention
 
@@ -1741,12 +1898,26 @@ readable and operable on the withdrawal station during all shifts.
 
 Alert thresholds, analysis window, movement class thresholds, identification time limit, backdating
 limit, and count tolerance must be configurable by a System Administrator without code changes.
-Records must keep their references, status history, and movement history.
+Records must keep their references, status history, and movement history. Differences between
+companies must be handled through install settings, not software changes, and every install must run
+a released version of the same software.
 
 ### NFR-SPIMS-011: Boundary Control
 
 SPIMS must not take on purchasing, supplier payment, inventory valuation, accounting, or maintenance
 work order responsibilities.
+
+### NFR-SPIMS-012: Portability
+
+SPIMS must run on any standard PostgreSQL database and on S3-compatible or local file storage, without
+depending on features specific to one hosting provider, so an install can be hosted by Microtech or on
+a customer's own infrastructure.
+
+### NFR-SPIMS-013: Install Isolation
+
+Each install must have its own database, file storage, users, and settings, and no data may be shared
+between installs. A new install must be creatable from an empty database using released software and
+install settings only.
 
 ---
 
@@ -1757,21 +1928,27 @@ work order responsibilities.
 Required dependency for sign-in, roles, and access control. Provided inside SPIMS by the application
 framework's authentication and a role and permission package, not by a separate platform service.
 
-### DEP-SPIMS-002: Hosted Database Service
+### DEP-SPIMS-002: PostgreSQL Database
 
-Required dependency for storing all SPIMS records. Supabase Postgres on the free tier. This tier has
-no automated backups, pauses after a period of inactivity, has no uptime guarantee, and limits database
-size to 500 MB. NFR-SPIMS-007 and NFR-SPIMS-008 address these limits. Expected data growth is about
-6 MB per year at 50 withdrawal lines per day.
+Required dependency for storing all SPIMS records. Each install needs its own PostgreSQL database.
+
+Microtech's production and demo installs use Supabase Postgres on the free tier. The free tier allows
+2 active projects, so these two installs use the whole allowance; any further environment on the same
+account needs a paid plan. The tier has no automated backups, pauses a project after a week of low
+activity, has no uptime guarantee, and limits each database to 500 MB. NFR-SPIMS-007 and NFR-SPIMS-008
+address these limits. Expected data growth is about 6 MB per year at 50 withdrawal lines per day.
+
+The database for each customer install is chosen with that customer (Appendix A, Q17).
 
 ### DEP-SPIMS-003: Application Hosting
 
 Required dependency for running the SPIMS web application, scheduled nightly jobs, and background
-exports. Hosting provider is pending (Appendix A, Q15).
+exports. Hosting for Microtech's installs is pending (Appendix A, Q15); hosting for each customer install is
+decided with that customer (Appendix A, Q17).
 
 ### DEP-SPIMS-004: Withdrawal Station Hardware
 
-Required dependency for withdrawal processing. Includes the workstation, ID/RFID badge reader, UPS, and
+Required dependency for withdrawal processing at each production install. Includes the workstation, ID/RFID badge reader, UPS, and
 network connection at the storeroom. A badge reader that acts as a keyboard is recommended because it
 needs no drivers.
 
@@ -1790,14 +1967,16 @@ Optional dependency for daily summaries and administrator notifications. SPIMS o
 Required dependency for nightly backups. Must be outside the database hosting provider. Destination is
 pending (Appendix A, Q3).
 
-### DEP-SPIMS-008: Microtech Spare Parts Master List
+### DEP-SPIMS-008: Spare Parts Master List
 
-Required dependency for go-live. The existing Excel list of spare parts and quantities is the source
-for FR-SPIMS-005. Its data quality determines Phase 1 effort.
+Required dependency for go-live of each production install. Each company's own list of spare parts and
+quantities is the source for FR-SPIMS-005 in that company's install. Its data quality determines Phase
+1 effort. Whether the existing Excel list belongs to Microtech or to the customer is pending
+(Appendix A, Q18).
 
-### DEP-SPIMS-009: Microtech Personnel and Equipment Lists
+### DEP-SPIMS-009: Personnel and Equipment Lists
 
-Required dependency for go-live. Personnel lists are needed for badge enrollment, and an equipment list
+Required dependency for go-live of each production install. Personnel lists are needed for badge enrollment, and an equipment list
 is needed for the equipment register, which every withdrawal requires.
 
 ### DEP-SPIMS-010: File Storage
@@ -1837,8 +2016,8 @@ Mitigation:
 
 ### RSK-SPIMS-003: Data Loss on the Free Hosting Tier
 
-The free database tier has no automated backups. A database failure or a mistaken change could lose
-inventory history.
+The free database tier used by Microtech's installs has no automated backups. A database failure or a
+mistaken change could lose inventory history.
 
 Mitigation:
 
@@ -1918,6 +2097,44 @@ Mitigation:
 - move advanced capabilities to future considerations
 - keep workflow out of SPIMS
 
+### RSK-SPIMS-010: Customer-Specific Changes Split the Product
+
+Changes made for one customer in that customer's copy of the software would make installs drift apart
+until they can no longer be updated together.
+
+Mitigation:
+
+- keep one set of software and one release line for all installs
+- handle differences between companies through install settings (FR-SPIMS-018)
+- add a customer's request to the product for every install, or decline it
+- do not keep separate software copies per customer
+- limit install settings to what genuinely differs between companies
+
+### RSK-SPIMS-011: Customer Hosting and Security Requirements
+
+Large customers may require hosting on their own infrastructure or an approved cloud provider, a
+security review, or local data storage, and may not accept a free hosting tier or third-party storage
+of their employees' names, photos, and badge identifiers.
+
+Mitigation:
+
+- keep SPIMS portable to any PostgreSQL database and file storage (NFR-SPIMS-012)
+- agree hosting, backups, and data ownership with each customer during Phase 1
+- keep personnel photos optional
+- handle personnel data in line with the Philippine Data Privacy Act of 2012
+
+### RSK-SPIMS-012: Demo Data Mixed with Real Data
+
+Sample data loaded into a production install, or a company's real data entered into a demo install,
+would corrupt real stock records or expose them during demonstrations.
+
+Mitigation:
+
+- keep demo and production as separate installs with separate databases
+- allow sample data only in installs designated as demo at setup (FR-SPIMS-019)
+- show a Demo label on every screen and exported report of a demo install
+- never import a company's real data into a demo install
+
 ---
 
 ## 16. Future Considerations
@@ -1936,6 +2153,7 @@ Mitigation:
 - scheduled report emails
 - consumption forecasting
 - mobile app for supervisors
+- tools to update and monitor many customer installs from one place
 
 ---
 
@@ -1957,6 +2175,9 @@ When generating or updating this PRD, AI agents must:
 - keep workflow out of SPIMS; supervisor authorization is the only approval mechanism
 - keep implementation detail in the System Design document, not in this PRD
 - keep this PRD and the System Design document consistent; when one changes, update the other
+- keep the software free of company-specific values; differences between companies belong in install settings
+- treat each install as serving one company; do not add company scoping to records
+- never load sample data outside a demo install
 - use Kora terminology consistently
 
 ---
@@ -1979,8 +2200,13 @@ When generating or updating this PRD, AI agents must:
 | Q12 | Is supervisor-authorized manual identification acceptable when a person has no badge or the reader fails? | Microtech | No | FR-SPIMS-007 |
 | Q13 | How are unused spare parts returned to the storeroom today, and how often? If often, Return to Stock should move into the MVP. | Microtech storeroom | No | Section 3.2, Section 16 |
 | Q14 | Should Critical Stock alerts send an email immediately rather than in the daily summary? | Microtech management | No | Section 10 |
-| Q15 | Where will the SPIMS web application be hosted? | Engineering / Microtech IT | Yes — deployment | DEP-SPIMS-003 |
+| Q15 | Where will the SPIMS application for Microtech's production and demo installs be hosted? | Engineering / Microtech IT | Yes — deployment | DEP-SPIMS-003 |
 | Q16 | Are the success measure targets in Section 2.3 acceptable? | Microtech management | No | Section 2.3 |
+| Q17 | Will customer installs be hosted by Microtech by default, or on each customer's own infrastructure? | Microtech management | Yes — before the first customer install | DEP-SPIMS-002, DEP-SPIMS-003, RSK-SPIMS-011 |
+| Q18 | Is the existing Excel spare parts list from Microtech's own storeroom, or from the customer the proposal was prepared for? A customer's data belongs only in that customer's install, not in Microtech's production or demo install. | Microtech | Yes — before import | FR-SPIMS-005, DEP-SPIMS-008, RSK-SPIMS-012 |
+
+Questions Q1, Q2, Q5, Q6, Q7, Q10, Q11, and Q13 are answered by Microtech for its production install,
+and must be answered again by each customer for that customer's install.
 
 Until Q13 is answered, a return of unused spare parts is handled by reversing the original withdrawal
 and recording the withdrawal again with the quantity actually used.
@@ -2029,3 +2255,5 @@ and recording the withdrawal again with the quantity actually used.
 | Data confidence on projections (FR-SPIMS-014) | Projections from little history are unreliable |
 | One stock level alert per spare part (FR-SPIMS-015) | Prevents three alerts for one spare part |
 | Unit of measure and decimal quantities (FR-SPIMS-001) | Spare parts such as oil and cable are not counted in pieces |
+| Install settings (FR-SPIMS-018) | SPIMS is a Microtech product installed separately for each company |
+| Sample data for demo installs (FR-SPIMS-019) | Microtech demonstrates SPIMS to customers |
