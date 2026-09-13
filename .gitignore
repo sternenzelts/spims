@@ -6,3 +6,5 @@
 /public/hot
 .DS_Store
 Thumbs.db
+/.claude/worktrees/
+/.superpowers/
