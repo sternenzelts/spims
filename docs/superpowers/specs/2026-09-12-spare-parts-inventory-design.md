@@ -7,6 +7,7 @@
 | **Deployment model** | One install per company — separate application and database (§3.6) |
 | **Source proposal** | *Project Proposal: Spare Parts Inventory Management System*, Engr. Jabez J. Agaya — prepared by Microtech for a customer |
 | **Requirements** | PRD: `docs/prd/Microtech_SPIMS_PRD_v0.1.0.md` |
+| **Current focus** | Microtech production and demo installs. Customer installs parked until customer details are confirmed |
 | **Document status** | Draft for review |
 | **Date** | 2026-09-12 |
 | **Stack** | Laravel 12 (PHP 8.3) · Livewire 3 · Tailwind · Supabase Postgres (free tier) |
@@ -1311,8 +1312,9 @@ in Phase 4 and loaded with sample data rather than real data.
 > **Superseded by PRD Appendix A** (`docs/prd/Microtech_SPIMS_PRD_v0.1.0.md`), which carries these
 > ten questions forward and adds eight more — supervisor availability on night shifts, manual
 > identification, returns of unused parts, immediate critical-stock email, application hosting,
-> success-measure targets, default hosting for customer installs, and who owns the existing Excel
-> parts list — each tagged with owner and whether it blocks. Maintain the list there.
+> success-measure targets, Microtech's starting parts list, default hosting for customer installs, and
+> use of the customer's Excel list — split into Microtech installs (current focus) and parked customer
+> questions, each tagged with what it blocks. None blocks development. Maintain the list there.
 
 1. **Badge technology** — are existing Microtech employee IDs to be reused, and if so are they
    125 kHz proximity, 13.56 MHz MIFARE, or barcode? Determines reader procurement (§10) and how §8.1

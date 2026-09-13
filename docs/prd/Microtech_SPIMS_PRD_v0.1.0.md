@@ -13,7 +13,7 @@
 | Demo Status | Not Ready |
 | Deployment Status | Not Deployed |
 | Production Readiness | Not Assessed |
-| Product Notes | Microtech-owned product. First installs: Microtech production storeroom and Microtech demo. Installed separately for each customer afterward. Open questions in Appendix A. |
+| Product Notes | Microtech-owned product. Current focus: Microtech production and demo installs. Customer installs parked until customer details are confirmed. Open questions in Appendix A. |
 
 ## Document Information
 
@@ -1971,8 +1971,9 @@ pending (Appendix A, Q3).
 
 Required dependency for go-live of each production install. Each company's own list of spare parts and
 quantities is the source for FR-SPIMS-005 in that company's install. Its data quality determines Phase
-1 effort. Whether the existing Excel list belongs to Microtech or to the customer is pending
-(Appendix A, Q18).
+1 effort. The starting list for Microtech's production install is pending (Appendix A,
+Q18). The Excel list prepared for the customer is not imported into any Microtech install; its use is
+parked (Appendix A, Q19).
 
 ### DEP-SPIMS-009: Personnel and Equipment Lists
 
@@ -2184,32 +2185,46 @@ When generating or updating this PRD, AI agents must:
 
 ## Appendix A: Open Questions
 
-| # | Question | Answered By | Blocking | Affects |
-|---|---|---|---|---|
-| Q1 | Will existing Microtech employee IDs be used as badges? If so, are they 125 kHz proximity, 13.56 MHz MIFARE, or barcode? | Microtech IT | Yes — hardware purchase | DEP-SPIMS-004, DEP-SPIMS-005, RSK-SPIMS-002 |
-| Q2 | How often will physical counts be done, and at what scope? | Microtech storeroom | No | FR-SPIMS-013 |
-| Q3 | Where will nightly backups be stored, and who holds access? | Microtech IT | Yes — go-live | NFR-SPIMS-008, DEP-SPIMS-007 |
-| Q4 | Who receives the daily alert and exception summaries? Are scheduled report emails wanted? | Microtech management | No | Section 10 |
-| Q5 | Is the proposal's purpose list final, or should it match existing maintenance work-type codes? | Microtech maintenance | No | FR-SPIMS-006 |
-| Q6 | Does an equipment list exist to import, or will it be built during Phase 1? | Microtech maintenance | Yes — withdrawals require equipment | FR-SPIMS-003, DEP-SPIMS-009 |
-| Q7 | How many shifts and custodians are there? | Microtech storeroom | No | User setup, training |
-| Q8 | Are the definitions of reorder point, minimum level, and critical level in FR-SPIMS-002 correct? If minimum level and reorder point mean the same thing, the Low Stock and Replenishment alerts should be merged. | Microtech / Engr. Agaya | No | FR-SPIMS-002, FR-SPIMS-015 |
-| Q9 | Is a Replenishment Report wanted? It is in the proposal's Section 3B but not its Section 7. | Engr. Agaya | No | Section 11.2 |
-| Q10 | Is a spare part typically used on more than one machine? | Microtech maintenance | No | FR-SPIMS-003 |
-| Q11 | Can a supervisor be reached on every shift, including nights? If not, who authorizes overrides and manual identification? | Microtech storeroom | Yes — night shift operation | FR-SPIMS-007, FR-SPIMS-008, RSK-SPIMS-005 |
-| Q12 | Is supervisor-authorized manual identification acceptable when a person has no badge or the reader fails? | Microtech | No | FR-SPIMS-007 |
-| Q13 | How are unused spare parts returned to the storeroom today, and how often? If often, Return to Stock should move into the MVP. | Microtech storeroom | No | Section 3.2, Section 16 |
-| Q14 | Should Critical Stock alerts send an email immediately rather than in the daily summary? | Microtech management | No | Section 10 |
-| Q15 | Where will the SPIMS application for Microtech's production and demo installs be hosted? | Engineering / Microtech IT | Yes — deployment | DEP-SPIMS-003 |
-| Q16 | Are the success measure targets in Section 2.3 acceptable? | Microtech management | No | Section 2.3 |
-| Q17 | Will customer installs be hosted by Microtech by default, or on each customer's own infrastructure? | Microtech management | Yes — before the first customer install | DEP-SPIMS-002, DEP-SPIMS-003, RSK-SPIMS-011 |
-| Q18 | Is the existing Excel spare parts list from Microtech's own storeroom, or from the customer the proposal was prepared for? A customer's data belongs only in that customer's install, not in Microtech's production or demo install. | Microtech | Yes — before import | FR-SPIMS-005, DEP-SPIMS-008, RSK-SPIMS-012 |
+The current focus is Microtech's production and demo installs. Customer installs are parked until the
+customer's details are confirmed.
 
-Questions Q1, Q2, Q5, Q6, Q7, Q10, Q11, and Q13 are answered by Microtech for its production install,
-and must be answered again by each customer for that customer's install.
+None of these questions blocks software development. The Blocks column shows what each one holds up.
+Where a question is unanswered, SPIMS uses the default described in the referenced section.
+
+### A.1 Microtech Installs
+
+| # | Question | Answered By | Blocks | Affects |
+|---|---|---|---|---|
+| Q1 | Will existing Microtech employee IDs be used as badges? If so, are they 125 kHz proximity, 13.56 MHz MIFARE, or barcode? | Microtech IT | Badge reader purchase | DEP-SPIMS-004, DEP-SPIMS-005, RSK-SPIMS-002 |
+| Q2 | How often will physical counts be done, and at what scope? | Microtech storeroom | Nothing | FR-SPIMS-013 |
+| Q3 | Where will nightly backups be stored, and who holds access? | Microtech IT | Microtech go-live | NFR-SPIMS-008, DEP-SPIMS-007 |
+| Q4 | Who receives the daily alert and exception summaries? Are scheduled report emails wanted? | Microtech management | Nothing | Section 10 |
+| Q5 | Is the proposal's purpose list final for Microtech, or should it match existing maintenance work-type codes? | Microtech maintenance | Nothing; the default list is used until answered | FR-SPIMS-006, FR-SPIMS-018 |
+| Q6 | Does an equipment list exist to import, or will it be built during Phase 1? | Microtech maintenance | Microtech go-live; withdrawals require equipment | FR-SPIMS-003, DEP-SPIMS-009 |
+| Q7 | How many shifts and custodians are there? | Microtech storeroom | Nothing | User setup, training |
+| Q8 | Are the definitions of reorder point, minimum level, and critical level in FR-SPIMS-002 correct? If minimum level and reorder point mean the same thing, the Low Stock and Replenishment alerts should be merged. | Microtech / Engr. Agaya | Nothing; the FR-SPIMS-002 definitions are used until answered | FR-SPIMS-002, FR-SPIMS-015 |
+| Q9 | Is a Replenishment Report wanted? It is in the proposal's Section 3B but not its Section 7. | Engr. Agaya | Nothing | Section 11.2 |
+| Q10 | Is a spare part typically used on more than one machine? | Microtech maintenance | Nothing | FR-SPIMS-003 |
+| Q11 | Can a supervisor be reached on every shift, including nights? If not, who authorizes overrides and manual identification? | Microtech storeroom | Microtech go-live | FR-SPIMS-007, FR-SPIMS-008, RSK-SPIMS-005 |
+| Q12 | Is supervisor-authorized manual identification acceptable when a person has no badge or the reader fails? | Microtech | Nothing | FR-SPIMS-007 |
+| Q13 | How are unused spare parts returned to the storeroom today, and how often? If often, Return to Stock should move into the MVP. | Microtech storeroom | Nothing | Section 3.2, Section 16 |
+| Q14 | Should Critical Stock alerts send an email immediately rather than in the daily summary? | Microtech management | Nothing | Section 10 |
+| Q15 | Where will the SPIMS application for Microtech's production and demo installs be hosted? | Engineering / Microtech IT | Deployment | DEP-SPIMS-003 |
+| Q16 | Are the success measure targets in Section 2.3 acceptable? | Microtech management | Nothing | Section 2.3 |
+| Q18 | Which spare parts list will Microtech's production install start from? The Excel list prepared for the customer is not imported into any Microtech install. | Microtech storeroom | Microtech go-live | FR-SPIMS-005, DEP-SPIMS-008, RSK-SPIMS-012 |
 
 Until Q13 is answered, a return of unused spare parts is handled by reversing the original withdrawal
 and recording the withdrawal again with the quantity actually used.
+
+### A.2 Customer Installs — Parked
+
+| # | Question | Answered By | Blocks | Affects |
+|---|---|---|---|---|
+| Q17 | Will customer installs be hosted by Microtech by default, or on each customer's own infrastructure? | Microtech management | First customer install | DEP-SPIMS-002, DEP-SPIMS-003, RSK-SPIMS-011 |
+| Q19 | How will the Excel spare parts list prepared for the customer be used, and which other details does the customer still need to confirm? | Microtech / customer | First customer install | FR-SPIMS-005, DEP-SPIMS-008 |
+
+For each customer install, Q1, Q2, Q5, Q6, Q7, Q10, Q11, and Q13 must be answered again by that
+customer.
 
 ---
 
