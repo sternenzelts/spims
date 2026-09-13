@@ -6,7 +6,7 @@
 | **First installs** | Microtech production storeroom · Microtech demo |
 | **Deployment model** | One install per company — separate application and database (§3.6) |
 | **Source proposal** | *Project Proposal: Spare Parts Inventory Management System*, Engr. Jabez J. Agaya — prepared by Microtech for a customer |
-| **Requirements** | PRD: `docs/prd/Microtech_SPIMS_PRD_v0.1.0.md` |
+| **Requirements** | PRD: `docs/prd/Microtech_SPIMS_PRD_v1.0.md` |
 | **Current focus** | Microtech production and demo installs. Customer installs parked until customer details are confirmed |
 | **Document status** | Draft for review |
 | **Date** | 2026-09-12 |
@@ -52,7 +52,7 @@ Three readings of the proposal shape the entire architecture:
 Part master and storage locations · equipment register · personnel and badge register · multi-line
 withdrawal with scan-last commit · replenishment receipts · stock adjustments · physical/cycle
 counting with variance posting · Excel/CSV part and opening-balance import · consumption and
-depletion analytics · five alert types · the eight reports of proposal §7 plus Replenishment (I) and Exceptions (J) · role-based access
+depletion analytics · six alert types (the proposal's five plus predicted out-of-stock) · the eight reports of proposal §7 plus Replenishment (I), Exceptions (J) and Predicted Out-of-Stock (K) · role-based access
 control · dual audit trail (stock ledger + configuration changes) · paper-fallback backdated entry ·
 nightly off-platform database backup · per-install settings (company profile, time zone, currency,
 withdrawal purposes, transaction prefixes, thresholds) · sample data loading for demo installs.
@@ -365,7 +365,7 @@ create table stock_transactions (
   transaction_no          text not null unique,          -- WD-2026-000123 / RP- / AJ- / OP-
   type                    text not null
                             check (type in ('withdrawal','replenishment','adjustment','opening')),
-  -- Status vocabulary follows the PRD (Kora terminology): draft -> completed | cancelled,
+  -- Status vocabulary follows the PRD: draft -> completed | cancelled,
   -- completed -> reversed. There is no pending/approved step; exceptions are authorised
   -- while the transaction is still a draft.
   status                  text not null default 'draft'
@@ -545,7 +545,7 @@ create table alerts (
   -- so a nullable part_id would silently defeat the open-once guarantee below.
   part_id                 bigint not null references parts(id),
   type                    text not null check (type in ('low_stock','critical_stock',
-                            'replenishment','high_consumption','inventory_discrepancy')),
+                            'replenishment','high_consumption','inventory_discrepancy','predicted_stockout')),
   status                  text not null default 'open'
                             check (status in ('open','acknowledged','resolved')),
   severity                text not null default 'warning'
@@ -587,7 +587,8 @@ create index audit_logs_user_idx      on audit_logs (user_id, created_at desc);
 -- Per-install configuration (§3.6). Keys: company.name, company.logo_path, company.address,
 -- regional.timezone, regional.currency, numbering.prefixes, analysis.window_months,
 -- movement_class.*, alerts.high_consumption.*, withdrawal.identification_timeout_seconds,
--- backdating.limit_days, counting.default_tolerance_pct, notifications.*
+-- backdating.limit_days, counting.default_tolerance_pct, notifications.*,
+-- prediction.default_lead_time_days, prediction.warning_buffer_days
 -- The install type (demo | production) is deliberately NOT here: it is environment
 -- configuration, so it cannot be changed by anyone with database or admin UI access.
 create table settings (
@@ -906,8 +907,9 @@ reorder point is offered as a documented extension (§6.4), not as a quiet repla
 - **Window** — trailing 6 months by default, configurable; shortened to the part's actual history if
   shorter, with a data-sufficiency flag (§6.3).
 - `average_daily_consumption (ADC) = total_withdrawn ÷ days_in_window`
-- `days_of_cover = on_hand ÷ ADC` — null when ADC is zero
-- `projected_reorder_date = today + (on_hand − reorder_point) ÷ ADC`
+- `days_of_cover = on_hand ÷ prediction_rate` — null when the rate is zero
+- `projected_reorder_date = today + (on_hand − reorder_point) ÷ prediction_rate`
+- `predicted_stockout_date = today + on_hand ÷ prediction_rate` — `prediction_rate` is defined in §6.6
 
 ### 6.3 Data confidence
 
@@ -956,6 +958,44 @@ Computed on demand from `stock_movements` via the partial withdrawals index (§4
 building it is report p95 latency exceeding 2 seconds. Premature rollups add a staleness class of bug
 for performance that is not yet needed.
 
+### 6.6 Predicted out-of-stock
+
+Added at Microtech's request in PRD v1.0. Every figure in §6.2 that divides by a consumption rate uses
+one **prediction rate**:
+
+```
+window_ADC      = withdrawn_in_window ÷ days_in_window
+recent_ADC      = withdrawn_last_30d ÷ 30        -- used only with ≥ 3 withdrawal events in the last 30 days
+prediction_rate = max(window_ADC, recent_ADC)
+predicted_stockout_date = today + on_hand ÷ prediction_rate
+```
+
+**Why the higher of the two rates.** A six-month average reacts slowly: a part whose use doubled last
+month would be predicted to last twice as long as it actually will. Taking the higher rate makes the
+prediction err early, which is the safe direction for a stock-out warning. The 3-event floor stops a
+single large withdrawal from being read as a trend.
+
+**Risk is measured against lead time**, because a predicted date only matters relative to how long a
+replenishment takes to arrive:
+
+| Risk | Condition |
+|---|---|
+| `late` | `predicted_stockout_date < today + lead_time` — an order placed today arrives after the stock-out |
+| `order_now` | `predicted_stockout_date < today + lead_time + warning_buffer` |
+| `ok` | otherwise |
+
+`lead_time` is `parts.lead_time_days`, falling back to the `prediction.default_lead_time_days` setting
+(default 14); `warning_buffer` defaults to 7. This is the first use of lead time; the full lead-time
+reorder-point model in §6.4 stays deferred.
+
+**Evaluated nightly for every active part, not only on commit.** The predicted date moves one day
+closer every day with no transaction at all, so a part can cross into `order_now` overnight. It is
+also re-evaluated on each commit for the parts affected.
+
+**Stated limits, shown in the UI:** this is a straight-line projection at the prediction rate. It knows
+nothing of seasonality, planned shutdowns or scheduled maintenance, and it inherits the §6.3 confidence
+level — no prediction at `none`, visibly marked at `low`. Seasonal forecasting stays in v2.
+
 ---
 
 ## 7. Alerts (proposal §6)
@@ -967,6 +1007,7 @@ for performance that is not yet needed.
 | Replenishment | `on_hand <= reorder_point` (only when `reorder_point > 0`), with consumption history in the alert context |
 | High consumption | `consumption_last_30d > (baseline_ADC × 30) × multiplier` (default 2.0) **and** ≥ 3 withdrawal events in the last 30 days **and** ≥ 60 days of baseline history |
 | Inventory discrepancy | A count session marked counted with a variance beyond tolerance, or a §5.3 override. Resolved when the part's count is posted |
+| Predicted out-of-stock | Risk is `order_now` or `late` **and** confidence is `moderate` or `good` (§6.6). Severity `warning`, raised to `critical` when risk is `late` on a part with `criticality = 'critical'`. Resolved when risk returns to `ok` or `on_hand` reaches 0. May be open alongside a stock-level alert — one is about time, the other about quantity |
 
 **High consumption, precisely.** `baseline_ADC` is average daily consumption over the analysis window
 *excluding the most recent 30 days*. Two errors are avoided: comparing a 30-day total directly
@@ -1060,7 +1101,7 @@ architecture (§3.2) becomes worth its cost.
 
 ## 9. Reports (proposal §7 A–H)
 
-All ten (A–J), each implemented as a filtered query plus a Livewire view plus CSV/XLSX and PDF export,
+All eleven (A–K), each implemented as a filtered query plus a Livewire view plus CSV/XLSX and PDF export,
 over one shared filter component and one shared export pipeline.
 
 | | Report | Primary source | Key filters |
@@ -1075,6 +1116,7 @@ over one shared filter component and one shared export pipeline.
 | H | Equipment Consumption | withdrawals by `equipment_id` | equipment, date range |
 | **I** | **Replenishment Report** | `stock_movements` (replenishments) | date range, part, supplier, reference |
 | **J** | **Exceptions Report** | `stock_transactions` flagged backdated / manual identification / override, plus reversals and adjustments | date range, exception type, user |
+| **K** | **Predicted Out-of-Stock Report** | `ConsumptionCalculator` prediction (§6.6), sorted by predicted date | risk, criticality, location, predicted date range |
 
 Report J is an addition: overrides, manual identifications and backdated entries each bypass part of
 the normal control, so supervisors need one place to review all of them.
@@ -1254,7 +1296,7 @@ These prove the §3.6 rules hold, so a customer install never depends on manual 
 | Proposal phase | Engineering work |
 |---|---|
 | **1 — Inventory assessment** | Excel data audit; agree the CSV import contract; min/max and criticality workshop; equipment register; badge technology confirmed |
-| **2 — System development** | **M1** schema, ledger, auth, RBAC · **M2** withdrawal flow end to end · **M3** replenishment, adjustments, importer · **M4** analytics, alerts, dashboard · **M5** the ten reports (A–J) and exports · **M6** counting, backup job, backdated entry |
+| **2 — System development** | **M1** schema, ledger, auth, RBAC · **M2** withdrawal flow end to end · **M3** replenishment, adjustments, importer · **M4** analytics, alerts, dashboard · **M5** the eleven reports (A–K) and exports · **M6** counting, backup job, backdated entry |
 | **3 — Hardware installation** | Reader procurement and acceptance test; workstation and UPS; location labelling; network |
 | **4 — Data migration and testing** | Import with dry-run; full physical verification count; UAT against §4 and §7; **backup restore drill**; concurrency and invariant suites green |
 | **5 — Implementation and training** | Custodian training (all shifts); requestor briefing; **two-week parallel run with paper**; go-live |
@@ -1282,7 +1324,7 @@ in Phase 4 and loaded with sample data rather than real data.
 | §5 | `Avg Monthly Consumption = Qty ÷ Months` | §6.1, implemented verbatim |
 | §5 | Min/max, safety stock, reorder point | §4.4, with the ambiguity between them resolved |
 | §6 | 5 alert types | §7 |
-| §7 | Reports A–H | §9, all eight, **plus Report I** for the §3B replenishment report §7 omits (§9.1) and **Report J** for exceptions |
+| §7 | Reports A–H | §9, all eight, **plus Report I** for the §3B replenishment report §7 omits (§9.1) **Report J** for exceptions and **Report K** for predicted out-of-stock |
 | §11 Phase 1 | "Classify parts according to equipment" | `part_equipment` (§4.3) |
 | §8 | Hardware | §10 |
 | §9 | Architecture flow | §3.1, §5.1 |
@@ -1309,7 +1351,7 @@ in Phase 4 and loaded with sample data rather than real data.
 
 ## 16. Open questions for the client
 
-> **Superseded by PRD Appendix A** (`docs/prd/Microtech_SPIMS_PRD_v0.1.0.md`), which carries these
+> **Superseded by PRD Appendix A** (`docs/prd/Microtech_SPIMS_PRD_v1.0.md`), which carries these
 > ten questions forward and adds eight more — supervisor availability on night shifts, manual
 > identification, returns of unused parts, immediate critical-stock email, application hosting,
 > success-measure targets, Microtech's starting parts list, default hosting for customer installs, and
@@ -1350,10 +1392,11 @@ in Phase 4 and loaded with sample data rather than real data.
 | Insufficient-stock override | In scope, via attributed adjustment | 2026-09-12 |
 | Paper fallback / backdated entry | In scope for v1 | 2026-09-12 |
 | Backups | Self-managed nightly `pg_dump` off-platform | 2026-09-12 |
-| Status vocabulary | `draft / completed / cancelled / reversed`, aligned to Kora terminology in the PRD | 2026-09-13 |
+| Status vocabulary | `draft / completed / cancelled / reversed`, aligned to the PRD | 2026-09-13 |
 | Manual personnel identification | Supervisor-authorised fallback when a badge is missing or the reader fails; pending client confirmation | 2026-09-13 |
 | Movement class ranking | By withdrawal event count, not quantity (units are not comparable) | 2026-09-13 |
 | Reversal dating | Reversing movements keep original type and `occurred_at` | 2026-09-13 |
 | Deployment model | One install per company (separate application and database); no shared multi-company hosting | 2026-09-13 |
 | Microtech installs | Production (own storeroom) and demo (sample data), kept separate | 2026-09-13 |
 | Withdrawal purposes | Per-install table seeded with the proposal's list, replacing the `CHECK` constraint | 2026-09-13 |
+| Predicted out-of-stock | Straight-line projection at max(window, recent 30-day) rate; risk against lead time; evaluated nightly and on commit | 2026-09-13 |

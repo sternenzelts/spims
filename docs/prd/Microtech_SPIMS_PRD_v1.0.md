@@ -1,48 +1,30 @@
 # Microtech – Spare Parts Inventory Management System Product Requirements Document
 
-## Workbook Sync
-
-| Field | Value |
-|---|---|
-| Module | Spare Parts Inventory Management System (SPIMS) |
-| Category | Business |
-| Owner | TBD |
-| Priority | TBD |
-| Current Phase | Planning |
-| Dev Status | Not Started |
-| Demo Status | Not Ready |
-| Deployment Status | Not Deployed |
-| Production Readiness | Not Assessed |
-| Product Notes | Microtech-owned product. Current focus: Microtech production and demo installs. Customer installs parked until customer details are confirmed. Open questions in Appendix A. |
-
 ## Document Information
 
 | Field | Value |
 |---|---|
 | Document Title | Microtech – Spare Parts Inventory Management System Product Requirements Document |
-| Version | 0.1.0 |
+| Version | 1.0 |
 | Date | September 13, 2026 |
-| Status | Draft |
+| Status | Issued for Microtech Review |
 | Owner | TBD |
 | Product Owner | Microtech Industrial Solutions, Inc. |
 | First Installs | Microtech production storeroom; Microtech demo |
 | Deployment Model | One install per company, each with its own application and database |
 | Source Proposal | Project Proposal: Spare Parts Inventory Management System — Engr. Jabez J. Agaya, prepared by Microtech for a customer |
-| Related Documents | System Design: `docs/superpowers/specs/2026-09-12-spare-parts-inventory-design.md` |
-| Capability Type | Core Business Module |
-| Operational Role | Business Domain |
-| Ownership Type | Source of Truth |
-| Dependency Level | Core |
-| User Surface | Operational |
-| Capability Group | Operations |
+| Related Documents | SPIMS System Design Document |
 | Classification | Confidential — for Microtech use only |
 
-> **Format note.** This document follows the KoraERP PRD structure. SPIMS is a standalone web
-> application owned by Microtech Industrial Solutions, Inc. and installed separately for each company;
-> it is not a module inside the Kora platform. The platform services
-> the Kora template assumes — Auth Service, Audit Service, Notification Service, Document Service, and
-> Workflow Application Service — are provided inside SPIMS itself or replaced by their concrete
-> equivalents in Section 14. Implementation detail is kept in the System Design document.
+## Revision History
+
+| Version | Date | Description |
+|---|---|---|
+| 0.1.0 | September 13, 2026 | Initial draft |
+| 1.0 | September 13, 2026 | First issued version. Adds predicted out-of-stock dates, out-of-stock risk, the Predicted Out-of-Stock alert, and the Predicted Out-of-Stock Report. Focus set to Microtech's installs. |
+
+This document defines what SPIMS must do. How SPIMS is built is described in the SPIMS System Design
+Document.
 
 ---
 
@@ -86,8 +68,9 @@ It supports:
 - backdated entry of transactions recorded on paper while SPIMS was unavailable
 - import of existing spare parts and opening balances from Excel
 - consumption and depletion monitoring
-- low stock, critical stock, replenishment, high consumption, and inventory discrepancy alerts
-- a dashboard and ten operational reports
+- a predicted out-of-stock date for each spare part, compared against its lead time
+- low stock, critical stock, replenishment, high consumption, inventory discrepancy, and predicted out-of-stock alerts
+- a dashboard and eleven operational reports
 - stock movement history showing the resulting inventory balance of every movement
 
 SPIMS owns spare part records, stock balances, stock movements, and withdrawal accountability. It does
@@ -105,8 +88,7 @@ demo install with sample data for showing SPIMS to customers.
 
 ### 1.3 Architectural Positioning
 
-SPIMS is a Core Business Module under Operations, deployed as a standalone web application with one
-install per company.
+SPIMS is a standalone web application, deployed with one install per company.
 
 It is the source of truth for spare part records, stock balances, and stock movements.
 
@@ -154,6 +136,7 @@ before the withdrawal is confirmed.
 - Change stock balances only through recorded stock movements.
 - Show the current available quantity of any spare part.
 - Warn before critical and low-stock spare parts run out.
+- Predict when each spare part will run out, early enough to replenish it before it does.
 - Measure consumption and depletion from actual withdrawal history.
 - Keep the storeroom operating during a SPIMS outage through paper fallback and backdated entry.
 - Serve every company from one product, with differences between companies handled through install settings rather than software changes.
@@ -165,9 +148,9 @@ before the withdrawal is confirmed.
 - Record withdrawals of multiple spare parts, confirmed by personnel badge scan.
 - Record replenishments, adjustments, and reversals.
 - Conduct physical inventory counts and post differences.
-- Calculate consumption, depletion rate, and days of stock cover.
-- Raise and resolve the five alert types defined in the proposal.
-- Provide the dashboard and ten reports.
+- Calculate consumption, depletion rate, days of stock cover, and predicted out-of-stock date.
+- Raise and resolve the five alert types defined in the proposal, plus the Predicted Out-of-Stock alert.
+- Provide the dashboard and eleven reports.
 - Audit every stock movement and every configuration change.
 - Configure an install for a company through install settings.
 - Load sample data into a demo install.
@@ -182,6 +165,7 @@ Microtech production install.
 | Withdrawals attributed to personnel, equipment, and purpose | 100% | Enforced at confirmation; Report B |
 | Parts with no difference at the first full physical count after 90 days of operation | At least 95% | Count session results |
 | Critical spare parts out of stock | Baseline set in first 3 months; target agreed after | Report F and alert history |
+| Spare parts that ran out with no Predicted Out-of-Stock alert raised beforehand | Under 10% of stock-outs per month from month 4 | Alert history and Report K |
 | Custodian time to complete a 5-line withdrawal, excluding picking | Under 60 seconds | Timed during user acceptance testing |
 | Supervisor overrides | Under 2% of withdrawals per month from month 4 | Report J |
 | Manual personnel identifications | Under 2% of withdrawals per month | Report J |
@@ -211,11 +195,12 @@ Microtech production install.
 - backdated entry from paper fallback forms
 - physical inventory counts and difference posting
 - consumption and depletion calculation
-- five inventory alert types
+- predicted out-of-stock date and out-of-stock risk
+- six inventory alert types
 - daily alert summary email
 - stock balance and movement history views
 - dashboard
-- ten reports with Excel, CSV, and PDF export
+- eleven reports with Excel, CSV, and PDF export
 - role-based access control
 - audit history
 - nightly stock balance verification
@@ -237,6 +222,7 @@ Microtech production install.
 - barcode or QR labels on individual spare parts
 - return of unused parts to stock as a separate transaction type (Appendix A, Q13)
 - reorder point and safety stock calculated from lead time and consumption variability
+- seasonal or statistical demand forecasting
 - offline-capable withdrawal station
 - mobile application
 - configurable approval workflows
@@ -269,9 +255,9 @@ visible from any other install.
 
 ---
 
-## 5. Module Ownership
+## 5. System Ownership
 
-### 5.1 Module Owns
+### 5.1 SPIMS Owns
 
 - spare part records and status
 - stock level and criticality settings
@@ -289,7 +275,7 @@ visible from any other install.
 - SPIMS user accounts and roles
 - install settings: company profile, time zone, currency, withdrawal purposes, transaction number prefixes, thresholds, and notification recipients
 
-### 5.2 Module Does Not Own
+### 5.2 SPIMS Does Not Own
 
 - purchase requests and purchase orders
 - supplier records and supplier payment
@@ -1119,6 +1105,9 @@ history.
 Average Monthly Consumption is calculated as stated in the proposal: Total Quantity Withdrawn ÷ Number
 of Months.
 
+The system also predicts the date each spare part will run out and compares it with the spare part's
+lead time, so replenishment can be requested before the spare part runs out.
+
 #### Actors
 
 - Inventory Planner
@@ -1135,16 +1124,17 @@ of Months.
 
 1. User opens Consumption & Depletion for one spare part or for all spare parts.
 2. System calculates the figures over the analysis window.
-3. System displays daily, weekly, and monthly consumption; average monthly consumption; average daily consumption; days of stock cover; projected reorder date; recommended replenishment quantity; movement class; and data confidence.
-4. User filters by criticality, movement class, equipment, or data confidence.
+3. System displays daily, weekly, and monthly consumption; average monthly consumption; average daily consumption; prediction rate; days of stock cover; projected reorder date; predicted out-of-stock date; out-of-stock risk; recommended replenishment quantity; movement class; and data confidence.
+4. User filters by criticality, movement class, equipment, out-of-stock risk, or data confidence.
 5. User opens the spare part detail or the related report.
 
 #### Alternate Flows
 
 - If a spare part has no withdrawals in the window, the system shows zero consumption and no projection.
 - If a spare part's history is shorter than the window, the system calculates over the available history and shows the data confidence level.
-- If average daily consumption is zero, days of stock cover and projected reorder date are not shown.
-- If the stock balance is already at or below the reorder point, the system shows Reorder Now instead of a projected date.
+- If the prediction rate is zero, days of stock cover, projected reorder date, and predicted out-of-stock date are not shown, and out-of-stock risk is OK.
+- If the stock balance is already at or below the reorder point, the system shows Reorder Now instead of a projected reorder date.
+- If the stock balance is zero, the system shows Out of Stock instead of a predicted out-of-stock date.
 - If the user lacks permission, the system denies access.
 
 #### Validation Rules
@@ -1156,8 +1146,16 @@ of Months.
 - The analysis window defaults to the most recent 6 months and is configurable.
 - Average Monthly Consumption = Total Quantity Withdrawn ÷ Number of Months in the window.
 - Average Daily Consumption = Total Quantity Withdrawn ÷ Number of Days in the window.
-- Days of Stock Cover = Current Stock Balance ÷ Average Daily Consumption.
-- Projected Reorder Date = Today + (Current Stock Balance − Reorder Point) ÷ Average Daily Consumption.
+- Prediction Rate = the higher of Average Daily Consumption over the analysis window and Average Daily Consumption over the last 30 days. The last-30-day rate is used only when the last 30 days contain at least 3 withdrawals. Using the higher rate makes predictions warn earlier when consumption is rising.
+- Days of Stock Cover = Current Stock Balance ÷ Prediction Rate.
+- Projected Reorder Date = Today + (Current Stock Balance − Reorder Point) ÷ Prediction Rate.
+- Predicted Out-of-Stock Date = Today + Current Stock Balance ÷ Prediction Rate.
+- Out-of-Stock Risk compares the predicted out-of-stock date with the spare part's lead time:
+  - Late: the predicted out-of-stock date is before Today + Lead Time, so an order placed today is expected to arrive after the spare part runs out
+  - Order Now: the predicted out-of-stock date is before Today + Lead Time + Warning Buffer
+  - OK: all other cases
+- Where a spare part has no lead time set, the default lead time from the install settings is used. The default lead time is 14 days and the warning buffer is 7 days; both are configurable.
+- Predictions assume consumption continues at the prediction rate. They do not account for seasonal patterns, planned shutdowns, or planned maintenance, and this is stated wherever predictions are shown.
 - Recommended Replenishment Quantity = Maximum Level − Current Stock Balance, shown when the stock balance is at or below the reorder point and a maximum level is set.
 - Data confidence is based on the number of withdrawals in the window: None (0), Low (1–2), Moderate (3–5), Good (6 or more).
 - Projections with Low confidence are visibly marked, and no projection is shown with None.
@@ -1180,8 +1178,8 @@ of Months.
 
 #### Description
 
-The system shall raise alerts for low stock, critical stock, replenishment, high consumption, and
-inventory discrepancy conditions, and resolve them when the condition clears.
+The system shall raise alerts for low stock, critical stock, replenishment, high consumption, inventory
+discrepancy, and predicted out-of-stock conditions, and resolve them when the condition clears.
 
 An alert is raised once for a spare part and condition and stays open until the condition clears. It
 is not raised again on every transaction.
@@ -1193,6 +1191,7 @@ is not raised again on every transaction.
 | Critical Stock | Stock balance is at or below the critical level, or a spare part with Critical criticality reaches zero | Stock balance is above the critical level and above zero | Critical |
 | High Consumption | Consumption in the last 30 days is more than twice the baseline rate for 30 days, with at least 3 withdrawals in the last 30 days | The condition is no longer true at the nightly check | Warning |
 | Inventory Discrepancy | A count session is marked Counted with a difference above tolerance, or a supervisor override is recorded | The spare part's count is posted | Warning |
+| Predicted Out-of-Stock | Out-of-stock risk is Late or Order Now, and data confidence is Moderate or Good | Out-of-stock risk returns to OK, or the stock balance reaches zero | Warning; Critical when the risk is Late for a spare part with Critical criticality |
 
 #### Actors
 
@@ -1231,6 +1230,9 @@ is not raised again on every transaction.
 - The High Consumption baseline rate is the average daily consumption over the analysis window, excluding the last 30 days, multiplied by 30.
 - High Consumption alerts are raised only for spare parts with at least 60 days of baseline history.
 - The High Consumption multiplier defaults to 2.0 and the minimum withdrawals to 3; both are configurable.
+- Predicted Out-of-Stock alerts are evaluated after each completed transaction for the affected spare parts, and for all Active spare parts in the nightly check, because the predicted date moves closer every day even without transactions.
+- An open Predicted Out-of-Stock alert has its severity raised when its risk changes from Order Now to Late.
+- A Predicted Out-of-Stock alert can be open at the same time as a stock level alert, because one warns about time and the other about quantity.
 - Acknowledgement records the user and the date and time.
 - Alerts cannot be deleted.
 - Alert history is kept.
@@ -1303,7 +1305,7 @@ part number and description, quantity change, personnel, and resulting inventory
 #### Description
 
 The system shall provide a dashboard summarizing stock status, alerts, exceptions, and recent activity,
-and shall generate the ten reports listed in Section 11.2 with Excel, CSV, and PDF export.
+and shall generate the eleven reports listed in Section 11.2 with Excel, CSV, and PDF export.
 
 #### Actors
 
@@ -1364,7 +1366,7 @@ software changes.
 | Regional | Time zone, which defaults to Philippine Standard Time, and currency for unit cost |
 | Withdrawal Purposes | Purposes offered on withdrawals, whether each requires remarks, and whether each is Active |
 | Transaction Numbering | Prefix for each transaction type; defaults are WD, RP, AJ, and OP |
-| Thresholds | Analysis window, movement class thresholds, High Consumption multiplier and minimum withdrawals, identification time limit, backdating limit, and default count tolerance |
+| Thresholds | Analysis window, movement class thresholds, High Consumption multiplier and minimum withdrawals, default lead time, out-of-stock warning buffer, identification time limit, backdating limit, and default count tolerance |
 | Notifications | Recipients of the daily alert and exceptions summaries, and whether individual alert emails are on for each alert type |
 
 #### Actors
@@ -1491,8 +1493,8 @@ lifecycles. All SPIMS lifecycles are native; there is no configurable workflow.
 
 Allowed transitions: Draft → Completed, Draft → Cancelled, Completed → Reversed.
 
-Stock transactions do not use the Pending or Approved statuses of the Kora status standard. A withdrawal
-is confirmed immediately at the counter, and any supervisor authorization for an exception is given
+Stock transactions have no Pending or Approved status. A withdrawal is confirmed immediately at the
+counter, and any supervisor authorization for an exception is given
 while the transaction is still Draft. Reversed is used because a Completed stock transaction can only
 be corrected, never cancelled.
 
@@ -1680,6 +1682,7 @@ Dashboard should show:
 - open alerts by severity
 - spare parts at or below the reorder point
 - spare parts at or below the critical level
+- spare parts predicted to run out within the next 30 days, with their out-of-stock risk
 - Critical-criticality spare parts that are out of stock
 - number of withdrawals and replenishments today
 - the ten most recent transactions
@@ -1697,17 +1700,19 @@ SPIMS should support:
 | A | Current Inventory Report | 7A | Part number, description, stock balance, unit of measure, storage location, minimum level, maximum level, reorder point, stock status | Storage location, criticality, stock status |
 | B | Spare Parts Withdrawal Report | 7B | Transaction number, date and time, employee number, masked badge identifier, personnel name, part number, description, quantity withdrawn, equipment, purpose | Date range, spare part, personnel, equipment, purpose |
 | C | Monthly Consumption Report | 7C | Part number, description, month, quantity consumed | Date range, spare part, equipment |
-| D | Depletion Rate Report | 7D | Historical consumption, average consumption, depletion rate, current stock balance, days of stock cover, recommended replenishment quantity, data confidence | Criticality, movement class, data confidence |
+| D | Depletion Rate Report | 7D | Historical consumption, average consumption, depletion rate, current stock balance, days of stock cover, predicted out-of-stock date, recommended replenishment quantity, data confidence | Criticality, movement class, data confidence |
 | E | Low Stock Report | 7E | Spare parts at or below the minimum level | Storage location, criticality |
 | F | Critical Spare Parts Report | 7F | Spare parts with Critical criticality and their current availability | Stock status |
 | G | Personnel Withdrawal History | 7G | Spare parts withdrawn by a person | Personnel, date range |
 | H | Equipment Spare Parts Consumption Report | 7H | Spare parts consumed by each equipment | Equipment, date range |
 | I | Replenishment Report | 3B | Date received, transaction number, supplier, delivery reference, part number, quantity, unit cost | Date range, spare part, supplier |
 | J | Exceptions Report | Added | Overrides, manual identifications, backdated entries, reversals, and adjustments, with user and reason | Date range, exception type, user |
+| K | Predicted Out-of-Stock Report | Added | Part number, description, criticality, stock balance, prediction rate, predicted out-of-stock date, lead time, out-of-stock risk, recommended replenishment quantity, data confidence; sorted by predicted out-of-stock date | Out-of-stock risk, criticality, storage location, predicted date range |
 
 Report I is required by the proposal's software function list in Section 3B but is not listed in its
 Section 7 reports. It is included here and pending confirmation (Appendix A, Q9). Report J is added so
-supervisors can review every exception from one place.
+supervisors can review every exception from one place. Report K is added so planners can see which
+spare parts will run out before a replenishment could arrive.
 
 ---
 
@@ -1757,7 +1762,7 @@ Spare part detail should show:
 - stock levels and criticality
 - storage location
 - linked equipment
-- consumption and depletion summary
+- consumption, depletion, and predicted out-of-stock summary
 - open alerts
 - movement history
 - audit history
@@ -2076,6 +2081,7 @@ Mitigation:
 - show only one stock level alert per spare part
 - send a daily summary instead of an email per alert
 - show data confidence and hide projections without history
+- base predictions on the higher of long-term and recent consumption so they warn early, and state that they assume consumption continues at that rate
 - tune thresholds during the continuous improvement phase
 
 ### RSK-SPIMS-008: Ownership Overlap with Purchasing and Accounting
@@ -2152,34 +2158,9 @@ Mitigation:
 - supplier master and supplier lead time tracking
 - integration with maintenance management or ERP systems
 - scheduled report emails
-- consumption forecasting
+- seasonal and statistical consumption forecasting to improve out-of-stock prediction
 - mobile app for supervisors
 - tools to update and monitor many customer installs from one place
-
----
-
-## 17. AI Generation Notes
-
-When generating or updating this PRD, AI agents must:
-
-- preserve this heading hierarchy
-- use only one H1 title
-- keep SPIMS positioned as the owner of spare part records, stock balances, stock movements, and withdrawal accountability
-- avoid turning SPIMS into a purchasing, accounting, valuation, or maintenance system
-- distinguish the Inventory Custodian, who signs in, from Requesting Personnel, who are identified by badge and have no account
-- keep the badge scan as the final step before withdrawal confirmation
-- never describe a stock balance change without a stock movement
-- never allow negative stock or editing of Completed transactions
-- keep Average Monthly Consumption = Total Quantity Withdrawn ÷ Number of Months as the baseline calculation
-- keep critical level, a quantity, separate from criticality, a classification
-- describe the badge scan as accountability, not as prevention of unauthorized access
-- keep workflow out of SPIMS; supervisor authorization is the only approval mechanism
-- keep implementation detail in the System Design document, not in this PRD
-- keep this PRD and the System Design document consistent; when one changes, update the other
-- keep the software free of company-specific values; differences between companies belong in install settings
-- treat each install as serving one company; do not add company scoping to records
-- never load sample data outside a demo install
-- use Kora terminology consistently
 
 ---
 
@@ -2212,6 +2193,7 @@ Where a question is unanswered, SPIMS uses the default described in the referenc
 | Q15 | Where will the SPIMS application for Microtech's production and demo installs be hosted? | Engineering / Microtech IT | Deployment | DEP-SPIMS-003 |
 | Q16 | Are the success measure targets in Section 2.3 acceptable? | Microtech management | Nothing | Section 2.3 |
 | Q18 | Which spare parts list will Microtech's production install start from? The Excel list prepared for the customer is not imported into any Microtech install. | Microtech storeroom | Microtech go-live | FR-SPIMS-005, DEP-SPIMS-008, RSK-SPIMS-012 |
+| Q20 | Are the default lead time of 14 days and out-of-stock warning buffer of 7 days suitable for Microtech's spare parts? | Microtech storeroom | Nothing; the defaults are used until answered | FR-SPIMS-014, FR-SPIMS-018 |
 
 Until Q13 is answered, a return of unused spare parts is handled by reversing the original withdrawal
 and recording the withdrawal again with the quantity actually used.
@@ -2246,6 +2228,7 @@ customer.
 | 4 | Step 8 transaction record fields | FR-SPIMS-007 |
 | 5 | Consumption and depletion analysis | FR-SPIMS-014 |
 | 5 | Minimum level, maximum level, safety stock, reorder point, recommended replenishment quantity | FR-SPIMS-002, FR-SPIMS-014; calculated safety stock in Section 16 |
+| 5 | Estimate when current inventory may reach its reorder point | FR-SPIMS-014, extended to a predicted out-of-stock date and out-of-stock risk |
 | 6 | Five system alerts | FR-SPIMS-015 |
 | 7 | Reports A to H | Section 11.2 |
 | 8 | Hardware and resources | DEP-SPIMS-004, DEP-SPIMS-005 |
@@ -2272,3 +2255,4 @@ customer.
 | Unit of measure and decimal quantities (FR-SPIMS-001) | Spare parts such as oil and cable are not counted in pieces |
 | Install settings (FR-SPIMS-018) | SPIMS is a Microtech product installed separately for each company |
 | Sample data for demo installs (FR-SPIMS-019) | Microtech demonstrates SPIMS to customers |
+| Predicted out-of-stock date, out-of-stock risk, Predicted Out-of-Stock alert, and Report K (FR-SPIMS-014, FR-SPIMS-015) | Requested by Microtech to warn before spare parts run out, early enough to replenish them |
