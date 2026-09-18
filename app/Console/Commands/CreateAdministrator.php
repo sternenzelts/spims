@@ -8,6 +8,7 @@ use App\Models\User;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
 
 use function Laravel\Prompts\password;
@@ -23,7 +24,9 @@ class CreateAdministrator extends Command
     public function handle(AuditLogger $audit): int
     {
         $validator = Validator::make(
-            ['email' => $this->argument('email'), 'name' => $this->argument('name')],
+            // Lowercased as Fortify's sign-in lowercases it (fortify.lowercase_usernames), or the account
+            // could never sign in: Postgres compares text case-sensitively.
+            ['email' => Str::lower((string) $this->argument('email')), 'name' => $this->argument('name')],
             ['email' => ['required', 'email', 'unique:users,email'], 'name' => ['required', 'string', 'max:255']],
         );
 

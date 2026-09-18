@@ -29,3 +29,25 @@ it('refuses an email address that is already taken', function () {
 
     expect(User::query()->where('email', 'it.admin@microtech.test')->count())->toBe(1);
 });
+
+it('stores the email in lowercase, because sign-in lowercases what is typed', function () {
+    $this->artisan('spims:create-admin', ['email' => 'IT.Admin@Microtech.test', 'name' => 'IT Administrator'])
+        ->expectsQuestion('Password', 'correct-horse-battery-staple')
+        ->assertSuccessful();
+
+    expect(User::query()->sole()->email)->toBe('it.admin@microtech.test');
+
+    $this->post(route('login.store'), ['email' => 'IT.Admin@Microtech.test', 'password' => 'correct-horse-battery-staple']);
+
+    $this->assertAuthenticated();
+});
+
+it('refuses an email address that differs from a taken one only in case', function () {
+    User::factory()->create(['email' => 'it.admin@microtech.test']);
+
+    $this->artisan('spims:create-admin', ['email' => 'IT.Admin@Microtech.test', 'name' => 'IT Administrator'])
+        ->expectsOutputToContain('The email has already been taken.')
+        ->assertFailed();
+
+    expect(User::query()->count())->toBe(1);
+});
