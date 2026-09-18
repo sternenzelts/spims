@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use App\Domain\Settings\InstallSettings;
 use App\Models\AuditLog;
+use App\Models\Setting;
 use App\Models\User;
+use App\Models\WithdrawalPurpose;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Schema\Builder;
@@ -19,7 +22,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Scoped, not singleton: saved settings are cached per request or queued job, never across them.
+        $this->app->scoped(InstallSettings::class);
     }
 
     /**
@@ -66,6 +70,8 @@ class AppServiceProvider extends ServiceProvider
         Relation::enforceMorphMap([
             'user' => User::class,
             'audit_log' => AuditLog::class,
+            'setting' => Setting::class,
+            'withdrawal_purpose' => WithdrawalPurpose::class,
         ]);
     }
 }
