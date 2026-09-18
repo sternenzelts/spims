@@ -19,7 +19,7 @@
 - **The pgsql connection** uses `PDO::ATTR_EMULATE_PREPARES => true` (design §12.1) and `'timezone' => 'UTC'`. Laravel writes datetimes without an offset, so **convert every datetime to UTC (`->utc()`) before it reaches the database.** The app timezone stays `UTC`. The install time zone (setting `regional.timezone`, default `Asia/Manila`) is for display, reporting periods and the year in transaction numbers.
 - **Schema conventions (design §4.2):**
   - `text`, never `varchar`.
-  - `timestamptz` (`timestampTz`).
+  - `timestamptz` (`timestampTz`), at full microsecond precision. `AppServiceProvider` sets `Schema\Builder::defaultTimePrecision(null)`, because Laravel's default of 0 makes Postgres round database-filled times to the second. Never pass a precision to `timestampTz()`. `SchemaConventionsTest` enforces both rules.
   - `numeric(14,3)` for quantities.
   - `text` + `CHECK` instead of enums.
   - Explicit indexes named as in design §4.3.

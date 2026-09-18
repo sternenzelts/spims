@@ -6,6 +6,7 @@ use App\Models\AuditLog;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Database\Schema\Builder;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\ServiceProvider;
@@ -36,6 +37,10 @@ class AppServiceProvider extends ServiceProvider
     protected function configureDefaults(): void
     {
         Date::use(CarbonImmutable::class);
+
+        // Plain timestamptz (microseconds), as the design specifies. Laravel's default of 0 makes
+        // Postgres round database-filled times to the second, which can cross a reporting day.
+        Builder::defaultTimePrecision(null);
 
         DB::prohibitDestructiveCommands(
             app()->isProduction(),
