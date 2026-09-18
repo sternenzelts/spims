@@ -10,6 +10,7 @@ use App\Models\Equipment;
 use App\Models\Part;
 use App\Models\Personnel;
 use App\Models\Setting;
+use App\Models\StockTransaction;
 use App\Models\StorageLocation;
 use App\Models\User;
 use App\Models\WithdrawalPurpose;
@@ -83,6 +84,7 @@ class AppServiceProvider extends ServiceProvider
             'equipment' => Equipment::class,
             'part' => Part::class,
             'personnel' => Personnel::class,
+            'stock_transaction' => StockTransaction::class,
         ]);
     }
 }
