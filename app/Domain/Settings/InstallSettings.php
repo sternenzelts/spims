@@ -6,6 +6,7 @@ use App\Domain\Audit\AuditLogger;
 use App\Enums\TransactionType;
 use App\Models\Setting;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use UnexpectedValueException;
 
@@ -62,24 +63,31 @@ final class InstallSettings
     }
 
     /**
-     * Save a setting and audit the old and new values. Saving null removes the saved value, so the
-     * default applies again.
+     * Save a setting and audit the old and new values, in one transaction so a change is never left
+     * unaudited. Saving null removes the saved value, so the default applies again.
      */
     public function set(string $key, mixed $value, User $actor): void
     {
         $old = $this->get($key);
 
-        if ($value === null) {
-            Setting::query()->whereKey($key)->delete();
-        } else {
-            Setting::query()->updateOrCreate(['key' => $key], ['value' => $value, 'updated_by_user_id' => $actor->id]);
-        }
+        try {
+            DB::transaction(function () use ($key, $value, $actor, $old): void {
+                if ($value === null) {
+                    Setting::query()->whereKey($key)->delete();
+                } else {
+                    Setting::query()->updateOrCreate(['key' => $key], ['value' => $value, 'updated_by_user_id' => $actor->id]);
+                }
 
-        $this->saved = null;
-        $new = $this->get($key);
+                $this->saved = null;
+                $new = $this->get($key);
 
-        if (self::sortedKeys($old) !== self::sortedKeys($new)) {
-            $this->audit->record('updated', new Setting(['key' => $key]), ['value' => $old], ['value' => $new], $actor);
+                if (self::sortedKeys($old) !== self::sortedKeys($new)) {
+                    $this->audit->record('updated', new Setting(['key' => $key]), ['value' => $old], ['value' => $new], $actor);
+                }
+            });
+        } finally {
+            // A rolled-back save must not leave its value cached.
+            $this->saved = null;
         }
     }
 

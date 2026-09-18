@@ -6,6 +6,7 @@ use App\Enums\TransactionType;
 use App\Models\AuditLog;
 use App\Models\Setting;
 use App\Models\User;
+use Illuminate\Database\QueryException;
 
 it('uses the defaults until a setting is saved', function () {
     $settings = app(InstallSettings::class);
@@ -67,6 +68,18 @@ it('does not audit a save that changes nothing', function () {
     app(InstallSettings::class)->set('regional.timezone', 'Asia/Manila', User::factory()->create());
 
     expect(AuditLog::query()->exists())->toBeFalse();
+});
+
+it('keeps the saved value when its audit entry cannot be written', function () {
+    $settings = app(InstallSettings::class);
+    $settings->set('company.name', 'Microtech Industrial Solutions, Inc.', User::factory()->create());
+
+    // Not a row in users, so the audit entry's foreign key fails after the setting row is deleted.
+    $unsavedActor = (new User)->forceFill(['id' => 999_999]);
+
+    expect(fn () => $settings->set('company.name', null, $unsavedActor))->toThrow(QueryException::class)
+        ->and(Setting::query()->find('company.name'))->not->toBeNull()
+        ->and($settings->companyName())->toBe('Microtech Industrial Solutions, Inc.');
 });
 
 it('does not audit a structured save that changes nothing, although jsonb reorders its keys', function () {
