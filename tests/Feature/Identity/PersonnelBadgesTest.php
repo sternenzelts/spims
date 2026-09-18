@@ -75,6 +75,15 @@ it('stops a replaced badge from identifying anyone', function () {
         ->new_values->toBe(['badge_uid_masked' => 'Z8765****']);
 });
 
+it('records nothing when a person scans the badge they already hold', function () {
+    $person = Personnel::factory()->create();
+
+    $this->badges->enroll($person, 'A12345678', $this->admin);
+    $this->badges->enroll($person->fresh(), 'A12345678', $this->admin);
+
+    expect(AuditLog::query()->pluck('event')->all())->toBe(['badge_enrolled']);
+});
+
 it('never writes a badge UID into the audit trail', function () {
     $this->badges->enroll(Personnel::factory()->create(), 'A12345678', $this->admin);
 

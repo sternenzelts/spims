@@ -35,7 +35,12 @@ final readonly class PersonnelBadges
                 ->lockForUpdate()
                 ->first();
 
-            if ($holder !== null && $holder->isNot($personnel)) {
+            // The person already holds this badge: nothing changes, so nothing is recorded.
+            if ($holder !== null && $holder->is($personnel)) {
+                return;
+            }
+
+            if ($holder !== null) {
                 if ($holder->is_active) {
                     throw new BadgeAlreadyEnrolled($holder);
                 }
