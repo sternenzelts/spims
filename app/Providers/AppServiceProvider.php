@@ -2,10 +2,13 @@
 
 namespace App\Providers;
 
+use App\Domain\Identity\BadgeReader;
+use App\Domain\Identity\KeyboardWedgeBadgeReader;
 use App\Domain\Settings\InstallSettings;
 use App\Models\AuditLog;
 use App\Models\Equipment;
 use App\Models\Part;
+use App\Models\Personnel;
 use App\Models\Setting;
 use App\Models\StorageLocation;
 use App\Models\User;
@@ -27,6 +30,7 @@ class AppServiceProvider extends ServiceProvider
     {
         // Scoped, not singleton: saved settings are cached per request or queued job, never across them.
         $this->app->scoped(InstallSettings::class);
+        $this->app->bind(BadgeReader::class, KeyboardWedgeBadgeReader::class);
     }
 
     /**
@@ -78,6 +82,7 @@ class AppServiceProvider extends ServiceProvider
             'storage_location' => StorageLocation::class,
             'equipment' => Equipment::class,
             'part' => Part::class,
+            'personnel' => Personnel::class,
         ]);
     }
 }
