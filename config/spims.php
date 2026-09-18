@@ -16,4 +16,16 @@ return [
 
     'badge_pepper' => env('BADGE_PEPPER'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Stock Lock Timeout
+    |--------------------------------------------------------------------------
+    |
+    | How long a posting waits for another station's stock row locks before
+    | failing with StockBusy. Postgres interval syntax: 5s or 500ms.
+    |
+    */
+
+    'lock_timeout' => env('SPIMS_LOCK_TIMEOUT', '5s'),
+
 ];
