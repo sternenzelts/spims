@@ -69,6 +69,12 @@ it('does not audit a save that changes nothing', function () {
     expect(AuditLog::query()->exists())->toBeFalse();
 });
 
+it('does not audit a structured save that changes nothing, although jsonb reorders its keys', function () {
+    app(InstallSettings::class)->set('numbering.prefixes', InstallSettings::DEFAULTS['numbering.prefixes'], User::factory()->create());
+
+    expect(AuditLog::query()->exists())->toBeFalse();
+});
+
 it('rejects settings it does not know', function () {
     expect(fn () => app(InstallSettings::class)->get('regional.language'))
         ->toThrow(InvalidArgumentException::class, 'Unknown install setting [regional.language].');

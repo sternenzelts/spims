@@ -78,9 +78,25 @@ final class InstallSettings
         $this->saved = null;
         $new = $this->get($key);
 
-        if ($old !== $new) {
+        if (self::sortedKeys($old) !== self::sortedKeys($new)) {
             $this->audit->record('updated', new Setting(['key' => $key]), ['value' => $old], ['value' => $new], $actor);
         }
+    }
+
+    /**
+     * jsonb stores object keys in its own order, so a saved setting is compared with its keys sorted.
+     */
+    private static function sortedKeys(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        if (! array_is_list($value)) {
+            ksort($value);
+        }
+
+        return array_map(self::sortedKeys(...), $value);
     }
 
     public function companyName(): ?string
