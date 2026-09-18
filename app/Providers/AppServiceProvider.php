@@ -4,7 +4,10 @@ namespace App\Providers;
 
 use App\Domain\Settings\InstallSettings;
 use App\Models\AuditLog;
+use App\Models\Equipment;
+use App\Models\Part;
 use App\Models\Setting;
+use App\Models\StorageLocation;
 use App\Models\User;
 use App\Models\WithdrawalPurpose;
 use Carbon\CarbonImmutable;
@@ -72,6 +75,9 @@ class AppServiceProvider extends ServiceProvider
             'audit_log' => AuditLog::class,
             'setting' => Setting::class,
             'withdrawal_purpose' => WithdrawalPurpose::class,
+            'storage_location' => StorageLocation::class,
+            'equipment' => Equipment::class,
+            'part' => Part::class,
         ]);
     }
 }
