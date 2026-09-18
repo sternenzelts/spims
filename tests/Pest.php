@@ -1,5 +1,6 @@
 <?php
 
+use App\Domain\Ledger\Exceptions\InsufficientStock;
 use App\Domain\Ledger\StockLedger;
 use App\Domain\Settings\InstallSettings;
 use App\Models\Part;
@@ -9,7 +10,10 @@ use App\Models\User;
 use Brick\Math\BigDecimal;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Process\Pool;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Process;
+use Laravel\SerializableClosure\SerializableClosure;
 use Tests\TestCase;
 
 /*
@@ -76,4 +80,78 @@ function partWithStock(string $onHand, array $attributes = []): Part
 function onHand(Part $part): ?string
 {
     return PartStock::query()->find($part->id)?->on_hand;
+}
+
+/**
+ * Post drafts from separate PHP processes at the same moment. A second connection holds the stock
+ * rows locked until every process is waiting on them, then lets go, so the postings really contend
+ * instead of running one after another. Returns 'completed' or 'insufficient' for each draft.
+ *
+ * Needs the lock_holder connection configured by the calling test.
+ *
+ * @param  list<int>  $transactionIds
+ * @param  list<int>  $lockedPartIds
+ * @return list<string>
+ */
+function postConcurrently(array $transactionIds, array $lockedPartIds): array
+{
+    $holder = DB::connection('lock_holder');
+    $holder->beginTransaction();
+    $holder->table('part_stock')->whereIn('part_id', $lockedPartIds)->lockForUpdate()->get();
+
+    // Children read .env, which points at the development database; send them to this test's database.
+    $database = config('database.connections.'.config('database.default').'.database');
+
+    $pool = Process::pool(function (Pool $pool) use ($transactionIds, $database): void {
+        foreach ($transactionIds as $transactionId) {
+            // No parameters: invoke-serialized-closure calls the SerializableClosure wrapper, whose
+            // __invoke() takes none, so the container cannot inject anything into this closure.
+            $post = static function () use ($transactionId): string {
+                try {
+                    app(StockLedger::class)->complete(StockTransaction::query()->findOrFail($transactionId), User::query()->firstOrFail());
+
+                    return 'completed';
+                } catch (InsufficientStock) {
+                    return 'insufficient';
+                }
+            };
+
+            $pool->path(base_path())
+                ->env([
+                    'LARAVEL_INVOKABLE_CLOSURE' => base64_encode(serialize(new SerializableClosure($post))),
+                    'DB_DATABASE' => $database,
+                    'SPIMS_LOCK_TIMEOUT' => '30s',
+                ])
+                ->command([PHP_BINARY, 'artisan', 'invoke-serialized-closure']);
+        }
+    })->start();
+
+    try {
+        $deadline = microtime(true) + 30;
+        $waitingOnLocks = "select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'";
+
+        while (DB::scalar($waitingOnLocks) < count($transactionIds)) {
+            if (microtime(true) > $deadline) {
+                throw new RuntimeException('The posting processes never reached the stock lock.');
+            }
+
+            usleep(50_000);
+        }
+    } finally {
+        $holder->rollBack();
+    }
+
+    return $pool->wait()->collect()->map(function ($result): string {
+        $payload = json_decode($result->output(), true);
+
+        if ($result->failed() || ! is_array($payload)) {
+            throw new RuntimeException("Posting process failed:\n".$result->output()."\n".$result->errorOutput());
+        }
+
+        if (! $payload['successful']) {
+            throw new RuntimeException("Posting process threw {$payload['exception']}: {$payload['message']}");
+        }
+
+        return unserialize($payload['result']);
+    })->values()->all();
 }
