@@ -28,4 +28,15 @@ return [
 
     'lock_timeout' => env('SPIMS_LOCK_TIMEOUT', '5s'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Nightly Jobs
+    |--------------------------------------------------------------------------
+    |
+    | UTC time the nightly jobs run. 18:00 UTC is 02:00 in Asia/Manila.
+    |
+    */
+
+    'nightly_at_utc' => env('SPIMS_NIGHTLY_AT_UTC', '18:00'),
+
 ];
