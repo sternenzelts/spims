@@ -206,6 +206,28 @@ it('announces each completed transaction', function () {
     Event::assertDispatched(StockTransactionCompleted::class, fn (StockTransactionCompleted $event): bool => $event->transaction->is($draft));
 });
 
+it('announces nothing when the caller rolls the posting back', function () {
+    $announced = 0;
+    Event::listen(StockTransactionCompleted::class, function () use (&$announced): void {
+        $announced++;
+    });
+    $part = partWithStock('10');
+    $announced = 0;
+
+    try {
+        DB::transaction(function () use ($part): void {
+            $this->ledger->complete(StockTransaction::factory()->withLines([[$part, '1']])->create(), $this->custodian);
+
+            throw new RuntimeException('The caller failed after posting.');
+        });
+    } catch (RuntimeException) {
+        // Expected: the caller's transaction rolled back, taking the posting with it.
+    }
+
+    expect($announced)->toBe(0)
+        ->and(onHand($part))->toBe('10.000');
+});
+
 it('locks stock rows in part id order, whatever the line order, so stations cannot deadlock', function () {
     $first = partWithStock('10');
     $second = partWithStock('10');
