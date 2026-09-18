@@ -571,9 +571,10 @@ return new class extends Migration
         DB::statement('create index audit_logs_auditable_idx on audit_logs (auditable_type, auditable_id, created_at desc)');
         DB::statement('create index audit_logs_user_idx on audit_logs (user_id, created_at desc)');
 
-        // Shared by every append-only table: audit_logs here, stock_movements later.
+        // Shared by every append-only table: audit_logs here, stock_movements later. "or replace"
+        // because migrate:fresh drops tables but not functions.
         DB::unprepared(<<<'SQL'
-            create function prevent_append_only_mutation() returns trigger
+            create or replace function prevent_append_only_mutation() returns trigger
             language plpgsql as $fn$
             begin
               raise exception '% is append-only (attempted % on id %)', tg_table_name, tg_op, old.id;
@@ -1986,7 +1987,8 @@ return new class extends Migration
             alter table part_stock add constraint part_stock_non_negative check (on_hand >= 0);
 
             -- Every part gets its lock target the moment it exists, however it was inserted.
-            create function create_part_stock_row() returns trigger
+            -- "or replace" because migrate:fresh drops tables but not functions.
+            create or replace function create_part_stock_row() returns trigger
             language plpgsql as $fn$
             begin
               insert into part_stock (part_id) values (new.id);
