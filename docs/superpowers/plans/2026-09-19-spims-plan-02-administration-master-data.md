@@ -145,7 +145,7 @@ tests/Feature/{Shell,Access,Settings,MasterData,Parts,Personnel}/
 
 **Files:**
 - Create: `app/Enums/InstallType.php`, `app/Support/Navigation.php`, `resources/views/components/install-notices.blade.php`, `tests/Feature/Shell/AppShellTest.php`
-- Modify: `config/spims.php`, `.env`, `.env.example`, `routes/web.php`, `resources/views/layouts/app.blade.php`, `resources/views/layouts/app/sidebar.blade.php`, `resources/views/layouts/auth/simple.blade.php`, `resources/views/components/app-logo.blade.php`, `tests/Pest.php`
+- Modify: `config/spims.php`, `.env`, `.env.example`, `phpunit.xml`, `routes/web.php`, `resources/views/layouts/app.blade.php`, `resources/views/layouts/app/sidebar.blade.php`, `resources/views/layouts/auth/simple.blade.php`, `resources/views/components/app-logo.blade.php`, `tests/Pest.php`
 - Delete: `resources/views/welcome.blade.php`, `tests/Feature/ExampleTest.php`
 
 **Interfaces:**
@@ -295,6 +295,12 @@ Append this entry to the array in `config/spims.php`, after `nightly_at_utc`:
 ```
 
 Add `APP_INSTALL_TYPE=production` below `APP_URL` in both `.env` and `.env.example`.
+
+In `phpunit.xml`, add this line after the `BADGE_PEPPER` line, so a developer who sets `demo` in `.env` to try the Demo label cannot change test results:
+
+```xml
+        <env name="APP_INSTALL_TYPE" value="production"/>
+```
 
 Create `app/Enums/InstallType.php`:
 
@@ -464,7 +470,7 @@ Expected: PASS, 8 tests.
 
 ```bash
 composer test
-git add app/Enums/InstallType.php app/Support/Navigation.php resources/views/components/install-notices.blade.php resources/views/components/app-logo.blade.php resources/views/layouts/app.blade.php resources/views/layouts/app/sidebar.blade.php resources/views/layouts/auth/simple.blade.php config/spims.php .env.example routes/web.php tests/Pest.php tests/Feature/Shell
+git add app/Enums/InstallType.php app/Support/Navigation.php resources/views/components/install-notices.blade.php resources/views/components/app-logo.blade.php resources/views/layouts/app.blade.php resources/views/layouts/app/sidebar.blade.php resources/views/layouts/auth/simple.blade.php config/spims.php .env.example phpunit.xml routes/web.php tests/Pest.php tests/Feature/Shell
 git commit -m "Show the install type, company name and a role-aware menu in the app shell"
 ```
 
