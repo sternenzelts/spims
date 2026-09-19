@@ -18,6 +18,7 @@ final class Navigation
         ['group' => 'Storeroom', 'label' => 'Dashboard', 'icon' => 'home', 'route' => 'dashboard', 'active' => 'dashboard', 'permission' => Permission::DashboardView],
         ['group' => 'Administration', 'label' => 'Users', 'icon' => 'users', 'route' => 'users.index', 'active' => 'users.*', 'permission' => Permission::UsersManage],
         ['group' => 'Administration', 'label' => 'Install settings', 'icon' => 'cog-6-tooth', 'route' => 'install-settings.edit', 'active' => 'install-settings.*', 'permission' => Permission::SettingsManage],
+        ['group' => 'Administration', 'label' => 'Withdrawal purposes', 'icon' => 'list-bullet', 'route' => 'withdrawal-purposes.index', 'active' => 'withdrawal-purposes.*', 'permission' => Permission::SettingsManage],
     ];
 
     /**

@@ -23,6 +23,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Route::livewire('install-settings', Admin\InstallSettingsForm::class)->name('install-settings.edit');
 
+    Route::livewire('withdrawal-purposes', Admin\WithdrawalPurposes::class)->name('withdrawal-purposes.index');
+
     Route::get('media/{path}', MediaController::class)
         ->where('path', '(company|personnel)/[A-Za-z0-9]+\.[A-Za-z0-9]+')
         ->name('media.show');
