@@ -4,6 +4,7 @@ use App\Http\Controllers\MediaController;
 use App\Livewire\Admin;
 use App\Livewire\MasterData\Equipment;
 use App\Livewire\MasterData\StorageLocations;
+use App\Livewire\Parts;
 use App\Livewire\Users;
 use Illuminate\Support\Facades\Route;
 
@@ -34,6 +35,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('equipment', Equipment\Index::class)->name('equipment.index');
     Route::livewire('equipment/create', Equipment\Form::class)->name('equipment.create');
     Route::livewire('equipment/{equipment}/edit', Equipment\Form::class)->name('equipment.edit');
+
+    Route::livewire('parts', Parts\Index::class)->name('parts.index');
+    Route::livewire('parts/{part}', Parts\Show::class)->whereNumber('part')->name('parts.show');
 
     Route::get('media/{path}', MediaController::class)
         ->where('path', '(company|personnel)/[A-Za-z0-9]+\.[A-Za-z0-9]+')

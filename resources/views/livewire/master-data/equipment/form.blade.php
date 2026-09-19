@@ -26,7 +26,7 @@
             <ul class="mt-4 space-y-1">
                 @forelse ($this->linkedParts as $part)
                     <li>
-                        <span data-part-number>{{ $part->part_number }}</span>
+                        <flux:link :href="route('parts.show', $part)" wire:navigate>{{ $part->part_number }}</flux:link>
                         <flux:text class="inline">{{ $part->description }}</flux:text>
                     </li>
                 @empty
