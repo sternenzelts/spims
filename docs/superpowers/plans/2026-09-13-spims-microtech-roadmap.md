@@ -24,7 +24,7 @@ it covers, and which decisions it must settle.
 
 | # | Plan | A user can… | PRD | Design §14 milestone | Status |
 |---|---|---|---|---|---|
-| 1 | [Foundation and Stock Ledger](2026-09-13-spims-plan-01-foundation-ledger.md) | sign in; nothing stock-related on screen yet, but the ledger is proven | NFR-001, 003, 005, 013; badge protection of NFR-004; domain parts of FR-004, FR-018 | M1 | Detailed plan written |
+| 1 | [Foundation and Stock Ledger](2026-09-13-spims-plan-01-foundation-ledger.md) | sign in; nothing stock-related on screen yet, but the ledger is proven | NFR-001, 003, 005, 013; badge protection of NFR-004; domain parts of FR-004, FR-018 | M1 | Merged 2026-09-19 (`87e922f`) |
 | 2 | Administration and Master Data | manage users, install settings, locations, equipment, parts, stock levels and personnel with badges; import parts and opening balances | FR-001–005, FR-018; NFR-004, 010 | M1, M3 | Outline |
 | 3 | Withdrawal and Replenishment at the Station | issue parts with the scan-last flow, including overrides and manual identification; receive stock | FR-006–009; FR-016 (lookup); NFR-006, 007 (drafts), 009 | M2, M3 | Outline |
 | 4 | Corrections and Counting | adjust stock, reverse transactions, enter paper-fallback transactions, run physical counts | FR-010–013 | M3, M6 | Outline |
