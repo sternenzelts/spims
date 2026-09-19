@@ -39,6 +39,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('parts', Parts\Index::class)->name('parts.index');
     Route::livewire('parts/create', Parts\Form::class)->name('parts.create');
     Route::livewire('parts/{part}/edit', Parts\Form::class)->whereNumber('part')->name('parts.edit');
+    Route::livewire('parts/{part}/stock-levels', Parts\StockLevelsForm::class)->whereNumber('part')->name('parts.stock-levels');
     Route::livewire('parts/{part}', Parts\Show::class)->whereNumber('part')->name('parts.show');
 
     Route::get('media/{path}', MediaController::class)

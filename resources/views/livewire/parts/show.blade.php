@@ -15,6 +15,9 @@
             @can('update', $part)
                 <flux:button icon="pencil-square" :href="route('parts.edit', $part)" wire:navigate>{{ __('Edit') }}</flux:button>
             @endcan
+            @can('manageStockLevels', $part)
+                <flux:button icon="adjustments-horizontal" :href="route('parts.stock-levels', $part)" wire:navigate>{{ __('Stock levels') }}</flux:button>
+            @endcan
         </div>
     </div>
 
@@ -58,4 +61,39 @@
             @endforelse
         </ul>
     </flux:card>
+
+    @can(\App\Enums\Permission::PartAuditView)
+        <flux:card class="mt-6">
+            <flux:heading size="lg">{{ __('Change history') }}</flux:heading>
+
+            <flux:table class="mt-4">
+                <flux:table.columns>
+                    <flux:table.column>{{ __('When') }}</flux:table.column>
+                    <flux:table.column>{{ __('Who') }}</flux:table.column>
+                    <flux:table.column>{{ __('Change') }}</flux:table.column>
+                </flux:table.columns>
+
+                <flux:table.rows>
+                    @foreach ($this->history as $entry)
+                        <flux:table.row :key="$entry->id">
+                            <flux:table.cell>
+                                {{ $entry->created_at->setTimezone(app(\App\Domain\Settings\InstallSettings::class)->timezone())->format('Y-m-d H:i') }}
+                            </flux:table.cell>
+                            <flux:table.cell>{{ $entry->user?->name }}</flux:table.cell>
+                            <flux:table.cell class="whitespace-normal">
+                                <div>{{ __(ucfirst(str_replace('_', ' ', $entry->event))) }}</div>
+                                @foreach ($entry->new_values ?? [] as $field => $value)
+                                    <div>
+                                        <flux:text class="inline">{{ __(str_replace('_', ' ', $field)) }}:</flux:text>
+                                        {{ \App\Support\AuditValue::display($entry->old_values[$field] ?? null) }}
+                                        → {{ \App\Support\AuditValue::display($value) }}
+                                    </div>
+                                @endforeach
+                            </flux:table.cell>
+                        </flux:table.row>
+                    @endforeach
+                </flux:table.rows>
+            </flux:table>
+        </flux:card>
+    @endcan
 </section>

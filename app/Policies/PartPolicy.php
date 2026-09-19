@@ -29,4 +29,9 @@ final class PartPolicy
     {
         return $user->can(Permission::PartsEdit);
     }
+
+    public function manageStockLevels(User $user, Part $part): bool
+    {
+        return $user->can(Permission::StockLevelsManage);
+    }
 }
