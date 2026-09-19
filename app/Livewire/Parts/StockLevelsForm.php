@@ -7,6 +7,8 @@ use App\Enums\Criticality;
 use App\Livewire\Concerns\ActsAsSignedInUser;
 use App\Models\Part;
 use App\Support\Quantity;
+use Brick\Math\BigDecimal;
+use Brick\Math\Exception\NumberFormatException;
 use Flux\Flux;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
@@ -58,6 +60,18 @@ class StockLevelsForm extends Component
     }
 
     /**
+     * Trim the level properties as they are typed. Livewire does not run TrimStrings on its update
+     * requests, and a stray space (is_numeric() accepts it, BigDecimal::of() does not) would
+     * otherwise crash warnings() on every re-render.
+     */
+    public function updated(string $property): void
+    {
+        if (in_array($property, ['reorder_point', 'min_level', 'critical_level', 'max_level'], true)) {
+            $this->{$property} = trim($this->{$property});
+        }
+    }
+
+    /**
      * Warnings for the levels as typed, shown before saving. None while a value is not yet a number.
      *
      * @return list<string>
@@ -66,7 +80,13 @@ class StockLevelsForm extends Component
     public function warnings(): array
     {
         foreach ($this->levels() as $value) {
-            if ($value !== null && ! is_numeric($value)) {
+            if ($value === null) {
+                continue;
+            }
+
+            try {
+                BigDecimal::of($value);
+            } catch (NumberFormatException) {
                 return [];
             }
         }

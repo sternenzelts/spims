@@ -105,6 +105,30 @@ it('accepts quantities to three decimal places and whole-day lead times only', f
         ->assertHasErrors(['reorder_point' => 'decimal', 'lead_time_days' => 'integer']);
 });
 
+it('trims a level typed with a stray space instead of crashing on re-render', function () {
+    $planner = userWithRoles(Role::Planner);
+    $part = Part::factory()->create()->refresh();
+
+    Livewire::actingAs($planner)->test(StockLevelsForm::class, ['part' => $part])
+        ->set('reorder_point', '10 ')
+        ->set('min_level', ' 4')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect($part->refresh())
+        ->reorder_point->toBe('10.000')
+        ->min_level->toBe('4.000');
+});
+
+it('shows a validation error for a non-numeric level instead of crashing on re-render', function () {
+    $part = Part::factory()->create()->refresh();
+
+    Livewire::actingAs(userWithRoles(Role::Admin))->test(StockLevelsForm::class, ['part' => $part])
+        ->set('reorder_point', 'ten')
+        ->call('save')
+        ->assertHasErrors('reorder_point');
+});
+
 it('shows the change history to supervisors, planners and administrators only', function (Role $role, bool $allowed) {
     $part = Part::factory()->create()->refresh();
 
