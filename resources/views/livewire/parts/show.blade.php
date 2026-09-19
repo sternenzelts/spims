@@ -12,6 +12,9 @@
         </div>
 
         <div class="flex gap-2" data-part-actions>
+            @can('update', $part)
+                <flux:button icon="pencil-square" :href="route('parts.edit', $part)" wire:navigate>{{ __('Edit') }}</flux:button>
+            @endcan
         </div>
     </div>
 

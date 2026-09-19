@@ -1,6 +1,10 @@
 <section class="w-full">
     <div class="mb-6 flex items-center justify-between gap-4">
         <flux:heading size="xl" level="1">{{ __('Spare parts') }}</flux:heading>
+
+        @can('create', \App\Models\Part::class)
+            <flux:button variant="primary" icon="plus" :href="route('parts.create')" wire:navigate>{{ __('New spare part') }}</flux:button>
+        @endcan
     </div>
 
     <div class="mb-4 flex flex-wrap gap-4">
