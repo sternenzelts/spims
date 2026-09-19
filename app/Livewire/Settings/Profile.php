@@ -6,6 +6,7 @@ use App\Concerns\ProfileValidationRules;
 use Flux\Flux;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -34,6 +35,9 @@ class Profile extends Component
     public function updateProfileInformation(): void
     {
         $user = Auth::user();
+
+        // Lowercase first, so the unique check compares what User::email() will store.
+        $this->email = Str::lower(trim($this->email));
 
         $validated = $this->validate($this->profileRules($user->id));
 
@@ -72,13 +76,5 @@ class Profile extends Component
         $user = Auth::user();
 
         return $user instanceof MustVerifyEmail && ! $user->hasVerifiedEmail();
-    }
-
-    #[Computed]
-    public function showDeleteUser(): bool
-    {
-        $user = Auth::user();
-
-        return ! $user instanceof MustVerifyEmail || $user->hasVerifiedEmail();
     }
 }

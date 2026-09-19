@@ -115,7 +115,9 @@ return [
     */
 
     'limiters' => [
-        'login' => 'login',
+        // Null: Fortify's failed-attempt limiter (App\Auth\LoginLockout) runs instead of a route
+        // throttle, which would also count successful sign-ins.
+        'login' => null,
         'two-factor' => 'two-factor',
         'passkeys' => 'passkeys',
     ],

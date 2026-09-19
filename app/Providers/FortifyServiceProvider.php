@@ -2,14 +2,17 @@
 
 namespace App\Providers;
 
-use App\Actions\Fortify\CreateNewUser;
 use App\Actions\Fortify\ResetUserPassword;
+use App\Auth\LoginLockout;
+use App\Models\User;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Laravel\Fortify\Fortify;
+use Laravel\Fortify\LoginRateLimiter;
 
 class FortifyServiceProvider extends ServiceProvider
 {
@@ -18,7 +21,7 @@ class FortifyServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(LoginRateLimiter::class, LoginLockout::class);
     }
 
     /**
@@ -28,16 +31,16 @@ class FortifyServiceProvider extends ServiceProvider
     {
         $this->configureActions();
         $this->configureViews();
+        $this->configureAuthentication();
         $this->configureRateLimiting();
     }
 
     /**
-     * Configure Fortify actions.
+     * Configure Fortify actions. There is no self-registration: System Administrators create accounts.
      */
     private function configureActions(): void
     {
         Fortify::resetUserPasswordsUsing(ResetUserPassword::class);
-        Fortify::createUsersUsing(CreateNewUser::class);
     }
 
     /**
@@ -49,24 +52,31 @@ class FortifyServiceProvider extends ServiceProvider
         Fortify::verifyEmailView(fn () => view('livewire.auth.verify-email'));
         Fortify::twoFactorChallengeView(fn () => view('livewire.auth.two-factor-challenge'));
         Fortify::confirmPasswordView(fn () => view('livewire.auth.confirm-password'));
-        Fortify::registerView(fn () => view('livewire.auth.register'));
         Fortify::resetPasswordView(fn () => view('livewire.auth.reset-password'));
         Fortify::requestPasswordResetLinkView(fn () => view('livewire.auth.forgot-password'));
     }
 
     /**
-     * Configure rate limiting.
+     * Deactivated accounts cannot sign in. EnsureUserIsActive ends sessions that are already open.
+     */
+    private function configureAuthentication(): void
+    {
+        Fortify::authenticateUsing(function (Request $request): ?User {
+            $user = User::query()->where('email', Str::lower($request->string(Fortify::username())->value()))->first();
+
+            return $user !== null && $user->is_active && Hash::check($request->string('password')->value(), $user->password)
+                ? $user
+                : null;
+        });
+    }
+
+    /**
+     * Configure rate limiting. Sign-in attempts are limited by App\Auth\LoginLockout.
      */
     private function configureRateLimiting(): void
     {
         RateLimiter::for('two-factor', function (Request $request) {
             return Limit::perMinute(5)->by($request->session()->get('login.id'));
-        });
-
-        RateLimiter::for('login', function (Request $request) {
-            $throttleKey = Str::transliterate(Str::lower($request->input(Fortify::username())).'|'.$request->ip());
-
-            return Limit::perMinute(5)->by($throttleKey);
         });
 
         RateLimiter::for('passkeys', function (Request $request) {
