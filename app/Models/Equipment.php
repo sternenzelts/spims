@@ -6,9 +6,12 @@ use Carbon\CarbonImmutable;
 use Database\Factories\EquipmentFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Table;
+use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Str;
 
 /**
  * @property int $id
@@ -18,6 +21,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
  * @property bool $is_active
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
+ * @property-read Collection<int, Part> $parts
  */
 #[Table(name: 'equipment')]
 #[Fillable(['code', 'name', 'area', 'is_active'])]
@@ -34,6 +38,17 @@ class Equipment extends Model
         return [
             'is_active' => 'boolean',
         ];
+    }
+
+    /**
+     * Trimmed and uppercased: codes are unique as stored, so cnc-01 and CNC-01 must not become two
+     * machines.
+     *
+     * @return Attribute<string, string>
+     */
+    protected function code(): Attribute
+    {
+        return Attribute::make(set: fn (string $value): string => Str::upper(trim($value)));
     }
 
     /**

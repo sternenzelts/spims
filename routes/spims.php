@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\MediaController;
 use App\Livewire\Admin;
+use App\Livewire\MasterData\Equipment;
 use App\Livewire\MasterData\StorageLocations;
 use App\Livewire\Users;
 use Illuminate\Support\Facades\Route;
@@ -29,6 +30,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('storage-locations', StorageLocations\Index::class)->name('storage-locations.index');
     Route::livewire('storage-locations/create', StorageLocations\Form::class)->name('storage-locations.create');
     Route::livewire('storage-locations/{location}/edit', StorageLocations\Form::class)->name('storage-locations.edit');
+
+    Route::livewire('equipment', Equipment\Index::class)->name('equipment.index');
+    Route::livewire('equipment/create', Equipment\Form::class)->name('equipment.create');
+    Route::livewire('equipment/{equipment}/edit', Equipment\Form::class)->name('equipment.edit');
 
     Route::get('media/{path}', MediaController::class)
         ->where('path', '(company|personnel)/[A-Za-z0-9]+\.[A-Za-z0-9]+')
