@@ -77,6 +77,16 @@ final readonly class PartRecords
             $this->guardActiveLocation($changes['default_location_id'], $part);
         }
 
+        // PRD FR-SPIMS-003: reactivating a part must not leave it at a location that has since been
+        // deactivated, even when the location itself is not part of this change.
+        if (($changes['is_active'] ?? null) === true && ! $part->is_active) {
+            $locationId = array_key_exists('default_location_id', $changes)
+                ? $changes['default_location_id']
+                : $part->default_location_id;
+
+            $this->guardActiveLocation($locationId, null);
+        }
+
         if (isset($changes['unit_of_measure']) && $changes['unit_of_measure'] !== $part->unit_of_measure) {
             $this->guardUnitOfMeasureUnlocked($part);
         }

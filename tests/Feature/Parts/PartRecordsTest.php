@@ -75,6 +75,30 @@ it('refuses an Inactive storage location', function () {
         ->assertHasErrors('default_location_id');
 });
 
+it('refuses to reactivate a part kept at an Inactive storage location', function () {
+    $closed = StorageLocation::factory()->create(['is_active' => false]);
+    $part = Part::factory()->create(['is_active' => false, 'default_location_id' => $closed->id]);
+
+    Livewire::actingAs(userWithRoles(Role::Supervisor))->test(Form::class, ['part' => $part])
+        ->set('is_active', true)
+        ->call('save')
+        ->assertHasErrors('default_location_id');
+
+    expect($part->refresh()->is_active)->toBeFalse();
+});
+
+it('reactivates a part kept at an Active storage location', function () {
+    $rack = StorageLocation::factory()->create(['is_active' => true]);
+    $part = Part::factory()->create(['is_active' => false, 'default_location_id' => $rack->id]);
+
+    Livewire::actingAs(userWithRoles(Role::Supervisor))->test(Form::class, ['part' => $part])
+        ->set('is_active', true)
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect($part->refresh()->is_active)->toBeTrue();
+});
+
 it('fixes the unit of measure once the part has stock movements', function () {
     configureInstall();
     $moved = partWithStock('5', ['unit_of_measure' => 'L']);
