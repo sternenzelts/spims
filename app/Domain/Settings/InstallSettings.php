@@ -7,6 +7,7 @@ use App\Enums\TransactionType;
 use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 use UnexpectedValueException;
 
@@ -39,7 +40,7 @@ final class InstallSettings
         'alerts.high_consumption.minimum_baseline_days' => 60,
         'withdrawal.identification_timeout_seconds' => 120,
         'backdating.limit_days' => 7,
-        'counting.default_tolerance_pct' => 0,
+        'counting.default_tolerance_pct' => 0.0,
         'notifications.digest_recipients' => [],
         'notifications.instant_alert_types' => [],
         'prediction.default_lead_time_days' => 14,
@@ -65,10 +66,15 @@ final class InstallSettings
     /**
      * Save a setting and audit the old and new values, in one transaction so a change is never left
      * unaudited. Saving null removes the saved value, so the default applies again.
+     *
+     * @throws ValidationException when the value breaks the setting's rules (SettingValues)
      */
     public function set(string $key, mixed $value, User $actor): void
     {
         $old = $this->get($key);
+
+        // Validated and cast to the default's type, so "6" and 6 are the same saved value.
+        $value = $value === null ? null : SettingValues::normalise($key, $value);
 
         try {
             DB::transaction(function () use ($key, $value, $actor, $old): void {
