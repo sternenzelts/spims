@@ -7,6 +7,7 @@ use App\Enums\Criticality;
 use App\Models\Part;
 use App\Models\User;
 use Brick\Math\BigDecimal;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Stock levels, criticality and lead time (PRD FR-SPIMS-002, design §4.4). A critical level above
@@ -45,15 +46,17 @@ final readonly class StockLevels
      */
     public function update(Part $part, array $levels, User $actor): void
     {
-        $old = $this->snapshot($part);
+        DB::transaction(function () use ($part, $levels, $actor): void {
+            $old = $this->snapshot($part);
 
-        $part->forceFill($levels)->save();
-        // Read back as numeric(14,3) stores them, so "4" and "4.000" are the same value.
-        $part->refresh();
+            $part->forceFill($levels)->save();
+            // Read back as numeric(14,3) stores them, so "4" and "4.000" are the same value.
+            $part->refresh();
 
-        $new = $this->snapshot($part);
+            $new = $this->snapshot($part);
 
-        $this->audit->recordChanges($part, $old, $new, $actor);
+            $this->audit->recordChanges($part, $old, $new, $actor);
+        });
     }
 
     /**

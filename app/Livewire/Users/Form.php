@@ -10,6 +10,7 @@ use App\Enums\Role;
 use App\Livewire\Concerns\ActsAsSignedInUser;
 use App\Models\User;
 use Flux\Flux;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -77,11 +78,14 @@ class Form extends Component
                 $accounts->create($this->name, $this->email, $this->password, $roles, $this->actor());
             } else {
                 $user = User::query()->findOrFail($this->userId);
-                $accounts->update($user, $this->name, $this->email, $roles, $this->is_active, $this->actor());
 
-                if ($this->password !== '') {
-                    $accounts->resetPassword($user, $this->password, $this->actor());
-                }
+                DB::transaction(function () use ($accounts, $user, $roles): void {
+                    $accounts->update($user, $this->name, $this->email, $roles, $this->is_active, $this->actor());
+
+                    if ($this->password !== '') {
+                        $accounts->resetPassword($user, $this->password, $this->actor());
+                    }
+                });
             }
         } catch (AccountChangeRefused $refused) {
             $this->addError($refused->field, $refused->getMessage());

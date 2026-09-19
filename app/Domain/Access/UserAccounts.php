@@ -62,10 +62,12 @@ final readonly class UserAccounts
 
     public function resetPassword(User $user, string $password, User $actor): void
     {
-        $user->forceFill(['password' => $password])->save();
+        DB::transaction(function () use ($user, $password, $actor): void {
+            $user->forceFill(['password' => $password])->save();
 
-        // The event only: never the password, hashed or not.
-        $this->audit->record('password_reset', $user, null, null, $actor);
+            // The event only: never the password, hashed or not.
+            $this->audit->record('password_reset', $user, null, null, $actor);
+        });
     }
 
     /**
