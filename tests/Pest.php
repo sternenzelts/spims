@@ -3,10 +3,12 @@
 use App\Domain\Ledger\Exceptions\InsufficientStock;
 use App\Domain\Ledger\StockLedger;
 use App\Domain\Settings\InstallSettings;
+use App\Enums\Role;
 use App\Models\Part;
 use App\Models\PartStock;
 use App\Models\StockTransaction;
 use App\Models\User;
+use App\Support\Navigation;
 use Brick\Math\BigDecimal;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -154,4 +156,44 @@ function postConcurrently(array $transactionIds, array $lockedPartIds): array
 
         return unserialize($payload['result']);
     })->values()->all();
+}
+
+/**
+ * A user holding the given roles.
+ */
+function userWithRoles(Role ...$roles): User
+{
+    $user = User::factory()->create();
+    $user->assignRole($roles);
+
+    return $user;
+}
+
+/**
+ * The four roles, each paired with whether it may perform an action, for role-by-action tests.
+ * Holders are written as in RolePermissionMatrixTest: C Custodian, S Supervisor, P Planner,
+ * A System Administrator, and a dash for a role that may not.
+ *
+ * @return array<string, array{0: Role, 1: bool}>
+ */
+function roleMatrix(string $holders): array
+{
+    $codes = ['C' => Role::Custodian, 'S' => Role::Supervisor, 'P' => Role::Planner, 'A' => Role::Admin];
+    $rows = [];
+
+    foreach ($codes as $code => $role) {
+        $rows[$role->label()] = [$role, str_contains($holders, $code)];
+    }
+
+    return $rows;
+}
+
+/**
+ * The labels of the sidebar items a user sees, in menu order.
+ *
+ * @return list<string>
+ */
+function menuLabels(User $user): array
+{
+    return collect(app(Navigation::class)->for($user))->flatten(1)->pluck('label')->values()->all();
 }

@@ -1,0 +1,43 @@
+<?php
+
+namespace App\Support;
+
+use App\Enums\Permission;
+use App\Models\User;
+
+/**
+ * The sidebar menu. A screen appears only to users holding its permission, so each role sees only
+ * what it can open (PRD §8). Labels and group headings are translated when rendered.
+ */
+final class Navigation
+{
+    /**
+     * @var list<array{group: string, label: string, icon: string, route: string, active: string, permission: Permission}>
+     */
+    private const array ITEMS = [
+        ['group' => 'Storeroom', 'label' => 'Dashboard', 'icon' => 'home', 'route' => 'dashboard', 'active' => 'dashboard', 'permission' => Permission::DashboardView],
+    ];
+
+    /**
+     * The menu groups this user may see, in order, each with its items.
+     *
+     * @return array<string, list<array{label: string, icon: string, route: string, active: string}>>
+     */
+    public function for(User $user): array
+    {
+        $groups = [];
+
+        foreach (self::ITEMS as $item) {
+            if ($user->can($item['permission'])) {
+                $groups[$item['group']][] = [
+                    'label' => $item['label'],
+                    'icon' => $item['icon'],
+                    'route' => $item['route'],
+                    'active' => $item['active'],
+                ];
+            }
+        }
+
+        return $groups;
+    }
+}

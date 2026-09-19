@@ -39,4 +39,18 @@ return [
 
     'nightly_at_utc' => env('SPIMS_NIGHTLY_AT_UTC', '18:00'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Install Type
+    |--------------------------------------------------------------------------
+    |
+    | demo or production, set once when the install is provisioned (design
+    | §3.6 rule 5). Environment configuration on purpose: nobody can change
+    | it from the database or the admin screens. A demo install shows a Demo
+    | label on every screen and export.
+    |
+    */
+
+    'install_type' => env('APP_INSTALL_TYPE', 'production'),
+
 ];

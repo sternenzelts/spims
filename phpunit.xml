@@ -36,5 +36,6 @@
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
         <env name="BADGE_PEPPER" value="testing-pepper-never-used-in-an-install"/>
+        <env name="APP_INSTALL_TYPE" value="production"/>
     </php>
 </phpunit>
