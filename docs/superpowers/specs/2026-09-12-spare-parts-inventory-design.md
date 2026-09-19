@@ -173,6 +173,7 @@ This distinction runs through the entire data model and must not be collapsed:
 | Authenticates by | Email + password (Laravel session) | Badge scan, at commit time only |
 | Logs in? | Yes, for a whole shift | **Never** |
 | Role in a withdrawal | Processes it (`custodian_user_id`) | Receives the parts (`personnel_id`) |
+| When they leave | Account deactivated (`users.is_active`); cannot sign in, history kept | Record set to Inactive; badge stops identifying them, history kept |
 
 ### 3.6 Deployment model: one install per company
 
@@ -306,6 +307,10 @@ create unique index parts_part_number_key   on parts (lower(part_number));
 create index parts_description_trgm         on parts using gin (description gin_trgm_ops);
 create index parts_criticality_active_idx   on parts (criticality) where is_active;
 create index parts_location_idx             on parts (default_location_id);
+
+-- Exact and leading part-number search (§12: under 150 ms at p95). The unique index on
+-- lower(part_number) follows the database collation, which cannot serve LIKE 'abc%'.
+create index parts_part_number_prefix_idx   on parts (lower(part_number) text_pattern_ops);
 
 -- Proposal §3B lists "Equipment/application" as a part-master field, and §11 Phase 1
 -- requires parts to be "classified according to equipment". A part commonly fits more
