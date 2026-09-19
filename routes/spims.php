@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\MediaController;
 use App\Livewire\Admin;
+use App\Livewire\MasterData\StorageLocations;
 use App\Livewire\Users;
 use Illuminate\Support\Facades\Route;
 
@@ -24,6 +25,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('install-settings', Admin\InstallSettingsForm::class)->name('install-settings.edit');
 
     Route::livewire('withdrawal-purposes', Admin\WithdrawalPurposes::class)->name('withdrawal-purposes.index');
+
+    Route::livewire('storage-locations', StorageLocations\Index::class)->name('storage-locations.index');
+    Route::livewire('storage-locations/create', StorageLocations\Form::class)->name('storage-locations.create');
+    Route::livewire('storage-locations/{location}/edit', StorageLocations\Form::class)->name('storage-locations.edit');
 
     Route::get('media/{path}', MediaController::class)
         ->where('path', '(company|personnel)/[A-Za-z0-9]+\.[A-Za-z0-9]+')
