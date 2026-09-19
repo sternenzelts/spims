@@ -13,6 +13,7 @@ use App\Models\User;
 $screens = [
     'Users' => ['users.index', null, '---A'],
     'New user' => ['users.create', null, '---A'],
+    'Edit user' => ['users.edit', fn () => ['user' => User::factory()->create()], '---A'],
     'Install settings' => ['install-settings.edit', null, '---A'],
     'Withdrawal purposes' => ['withdrawal-purposes.index', null, '---A'],
     'Storage locations' => ['storage-locations.index', null, '-SPA'],
