@@ -13,9 +13,9 @@
 
 ## 1. How the Work Is Split
 
-SPIMS is built in **seven plans**. Each plan ends with software that runs, passes `composer test`, and can
-be demonstrated or reviewed on its own. Plans run in order, because each builds on the tables,
-services and permissions of the plans before it.
+SPIMS is built in **seven plans**, with Plan 2's import split into Plan 2b. Each plan ends with software
+that runs, passes `composer test`, and can be demonstrated or reviewed on its own. Plans run in order,
+because each builds on the tables, services and permissions of the plans before it.
 
 **Only Plan 1 is written in full.** The detailed plan for each later plan is written when the plan before
 it is merged, against the code as actually built, so its class names, method signatures and test
@@ -25,7 +25,8 @@ it covers, and which decisions it must settle.
 | # | Plan | A user can… | PRD | Design §14 milestone | Status |
 |---|---|---|---|---|---|
 | 1 | [Foundation and Stock Ledger](2026-09-13-spims-plan-01-foundation-ledger.md) | sign in; nothing stock-related on screen yet, but the ledger is proven | NFR-001, 003, 005, 013; badge protection of NFR-004; domain parts of FR-004, FR-018 | M1 | Merged 2026-09-19 (`87e922f`) |
-| 2 | Administration and Master Data | manage users, install settings, locations, equipment, parts, stock levels and personnel with badges; import parts and opening balances | FR-001–005, FR-018; NFR-004, 010 | M1, M3 | Outline |
+| 2 | [Administration and Master Data](2026-09-19-spims-plan-02-administration-master-data.md) | manage users, install settings, purposes, locations, equipment, parts, stock levels and personnel with badges | FR-001–004, FR-018; NFR-004, 010 | M1, M3 | Detailed plan written |
+| 2b | Spare Part and Opening Balance Import | import spare parts and opening balances from Excel or CSV, with a dry run | FR-005 | M1, M3 | Outline |
 | 3 | Withdrawal and Replenishment at the Station | issue parts with the scan-last flow, including overrides and manual identification; receive stock | FR-006–009; FR-016 (lookup); NFR-006, 007 (drafts), 009 | M2, M3 | Outline |
 | 4 | Corrections and Counting | adjust stock, reverse transactions, enter paper-fallback transactions, run physical counts | FR-010–013 | M3, M6 | Outline |
 | 5 | Analytics, Prediction, Alerts and Dashboard | see consumption, depletion and predicted stock-outs; receive and acknowledge alerts; use the dashboard | FR-014, FR-015, §10 notifications, FR-017 (dashboard) | M4 | Outline |
@@ -81,17 +82,36 @@ purposes, master data schema, personnel and badges, ledger schema, transaction n
 
 ## 3. Plan 2 — Administration and Master Data
 
+Written in full: [2026-09-19-spims-plan-02-administration-master-data.md](2026-09-19-spims-plan-02-administration-master-data.md).
+It has 13 tasks:
+
+- app shell
+- sign-in security
+- user accounts
+- setting validation
+- the Install Settings screen
+- withdrawal purposes
+- storage locations
+- equipment
+- part search
+- part records
+- stock levels
+- personnel and badges
+- a screen access matrix with a provisioning walkthrough
+
+Its "Decisions Made in This Plan" section settles the decisions listed below.
+
 **Outcome.** A System Administrator provisions an install through screens alone:
 
 - creates user accounts with roles
 - sets the company profile, time zone, purposes, prefixes and thresholds
 - creates storage locations and equipment
-- imports spare parts and opening balances with a dry run
+- creates spare parts and sets their stock levels
 - registers personnel and enrolls badges
 
-This covers steps 4–8 of the design §3.6 provisioning checklist.
+This covers steps 4–6 and 8 of the design §3.6 provisioning checklist. Step 7, the import, is Plan 2b.
 
-**Requirements.** FR-SPIMS-001 to 005 and FR-SPIMS-018; NFR-004 (sign-in lockout, and masked badges on every screen using Plan 1's masking rule) and NFR-010. Design §3.4, §3.6, §4.4, §5.7 and §8.2.
+**Requirements.** FR-SPIMS-001 to 004 and FR-SPIMS-018; NFR-004 (sign-in lockout, and masked badges on every screen using Plan 1's masking rule) and NFR-010. Design §3.4, §3.6, §4.4 and §8.2.
 
 **Scope.**
 
@@ -104,7 +124,7 @@ This covers steps 4–8 of the design §3.6 provisioning checklist.
   - A user list and form: create, edit, deactivate, and assign roles.
   - An administrator cannot remove their own admin role.
   - Every change is audited.
-  - Login throttling: temporarily lock sign-in for 15 minutes after repeated failures (NFR-004), configured in the Fortify `login` rate limiter.
+  - Login throttling: temporarily lock sign-in for 15 minutes after repeated failures (NFR-004), through Fortify's failed-attempt limiter.
 - **Install Settings screen**, validating per FR-018:
   - Company name, logo on the configured disk, and address.
   - Time zone and currency changes require confirmation.
@@ -118,41 +138,73 @@ This covers steps 4–8 of the design §3.6 provisioning checklist.
   - A custodian may create a part only when receiving it, and may edit only basic fields.
   - Equipment associations through `part_equipment`.
 - **Stock levels and criticality** (FR-002):
-  - A planner-only form.
-  - It warns, without refusing, when `critical ≤ min ≤ reorder ≤ max` is violated (design §4.4).
+  - A form for planners and administrators.
+  - It refuses a critical level above the minimum, or a maximum below it, as FR-002 and the `parts_levels_ordered` CHECK do.
+  - It warns, then saves once confirmed, when the reorder point is below the minimum or above the maximum (design §4.4).
   - Changes are audited with old and new values.
 - **Personnel and badges** (FR-004):
   - A registration form and a scan field for the keyboard-wedge reader.
   - Masked badge everywhere; the full badge only with `BadgesViewFull`.
   - Deactivation rather than deletion.
   - Photo upload.
-- **Import** (FR-005), using `maatwebsite/excel` 4.x:
-  - The `import_batches` table (design §4.3).
-  - Template download, upload, column mapping, row validation and a dry-run preview. Confirming writes parts and opening balances through `StockLedger` as `opening` transactions, chunked into batches of lines.
-  - Column permissions: stock levels are admin/planner only; opening quantities are admin only.
-  - A queue job for large files.
 - Policies for every model above, mapped to `Permission`.
 
 **Key tests.**
 
 - A role-by-action matrix over every screen and action.
-- Import:
-  - A dry run writes nothing.
-  - Duplicate part numbers (case-insensitive) are reported per row.
-  - An opening balance for a part that already has movements is refused.
-  - A confirmed import leaves `ledger:verify` clean.
 - Changing a prefix leaves existing numbers unchanged.
 - A used purpose cannot be deleted.
 - A badge already held by an Active person is refused with the holder's name.
 - The login lockout releases after 15 minutes (time travel).
 
+**Decisions to settle when writing the detailed plan.** All settled in the detailed plan:
+
+- The file storage disk for logos and photos: the default disk, local during development and S3-compatible when hosted (Plan 7).
+- Deactivating users.
+- The sign-in audit.
+- The custodian's conditional rights.
+
+**Open questions that affect it** (defaults apply until answered): Q5 purposes, Q6 equipment list, Q8 stock level semantics, Q10 parts on several machines.
+
+---
+
+## 3b. Plan 2b — Spare Part and Opening Balance Import
+
+Split from Plan 2 so that it can be written in two conditions:
+
+- **Against the spreadsheet library's installed source.** `maatwebsite/excel` 4.0 supports Laravel 13 but reads through PhpSpreadsheet. Its v4 API differs from v3. `openspout/openspout` 5.x is a streaming alternative.
+- **Once Microtech's starting parts list (Q18) is known.**
+
+It is written after Plan 2 merges.
+
+**Outcome.** A System Administrator, or a supervisor where permitted, imports spare parts and opening balances from an Excel or CSV file with a dry run. This is design §3.6 provisioning checklist step 7.
+
+**Requirements.** FR-SPIMS-005. Design §4.1, §4.3 (`import_batches`) and §5.7.
+
+**Scope.**
+
+- The `import_batches` table (design §4.3), with the column mapping and the stored file.
+- Template download, upload, column mapping, row validation and a dry-run preview.
+- Confirming writes parts through Plan 2's `PartRecords`, and opening balances through `StockLedger` as `opening` transactions, chunked into batches of lines.
+- Location and equipment codes match after trimming and uppercasing, as Plan 2's mutators store them.
+- Column permissions: stock levels are admin/planner only; opening quantities are admin only.
+- A queue job for large files. Local PHP is capped at 128 MB, so the reader must stream.
+
+**Key tests.**
+
+- A dry run writes nothing.
+- Duplicate part numbers (case-insensitive) are reported per row.
+- An opening balance for a part that already has movements is refused.
+- A confirmed import leaves `ledger:verify` clean.
+
 **Decisions to settle when writing the detailed plan.**
 
-- The import column contract and template file. This needs the Q18 answer on Microtech's starting parts list.
-- The batch size for opening-balance transactions, so a 5,000-part import does not hold thousands of row locks in one transaction.
-- The file storage disk for logos and photos: local during development, S3-compatible when hosted (Plan 7).
+- The spreadsheet library, chosen after reading its installed source.
+- The import column contract and template file. This needs the Q18 answer on Microtech's starting parts list. Without it, default to the `parts` columns plus location code, equipment codes and opening quantity, and let the mapping step absorb a differently shaped file.
+- The batch size for opening-balance transactions, so a 5,000-part import does not hold thousands of row locks in one transaction. The working default is 200 lines per transaction.
+- Whether a confirmed import is all or nothing, or resumable batch by batch.
 
-**Open questions that affect it** (defaults apply until answered): Q5 purposes, Q6 equipment list, Q8 stock level semantics, Q10 parts on several machines, Q18 starting parts list.
+**Open questions that affect it:** Q18 starting parts list.
 
 ---
 
@@ -409,7 +461,7 @@ These run alongside the plans, following design §14 (proposal Phases 1, 3, 4 an
 
 | When | Item | Owner | PRD question |
 |---|---|---|---|
-| Before Plan 2 is finished | Confirm the starting parts list and its columns | Microtech storeroom | Q18 |
+| Before Plan 2b is written | Confirm the starting parts list and its columns | Microtech storeroom | Q18 |
 | Before Plan 2 is finished | Equipment list, or plan to build it | Microtech maintenance | Q6 |
 | Before Plan 3 is finished | Badge technology; buy a keyboard-wedge reader (13.56 MHz MIFARE DESFire if badges are new) | Microtech IT | Q1 |
 | Before Plan 3 is finished | Supervisor coverage on night shifts | Microtech storeroom | Q11, Q12 |
@@ -433,4 +485,4 @@ These are deliberately left to the plan that owns them, and recorded here so the
 | The inventory discrepancy alert is raised before the `alerts` table exists; resolved with an event that Plan 5 handles | Plans 3 → 5 |
 | A transaction origin marker, so override and count adjustments are identifiable as non-reversible | Plan 4 |
 | The transaction type used by count postings | Plan 4 |
-| The batch size for opening-balance imports | Plan 2 |
+| The batch size for opening-balance imports | Plan 2b |
