@@ -56,3 +56,26 @@ it('cannot be changed or deleted once written', function () {
         ->and(inSavepoint(fn () => $log->delete()))
         ->toThrow(QueryException::class, 'audit_logs is append-only');
 });
+
+it('records only the values that changed', function () {
+    $user = User::factory()->create();
+
+    app(AuditLogger::class)->recordChanges(
+        $user,
+        ['name' => 'A', 'email' => 'a@example.test'],
+        ['name' => 'B', 'email' => 'a@example.test'],
+    );
+
+    expect(AuditLog::query()->sole())
+        ->event->toBe('updated')
+        ->old_values->toBe(['name' => 'A'])
+        ->new_values->toBe(['name' => 'B']);
+});
+
+it('records nothing when no value changed', function () {
+    $user = User::factory()->create();
+
+    app(AuditLogger::class)->recordChanges($user, ['name' => 'A'], ['name' => 'A']);
+
+    expect(AuditLog::query()->exists())->toBeFalse();
+});

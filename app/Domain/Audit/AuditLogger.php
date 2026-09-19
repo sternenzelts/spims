@@ -5,6 +5,7 @@ namespace App\Domain\Audit;
 use App\Models\AuditLog;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Context;
 
@@ -42,5 +43,24 @@ final class AuditLogger
             'ip_address' => Context::getHidden(self::IP_ADDRESS),
             'user_agent' => Context::getHidden(self::USER_AGENT),
         ]);
+    }
+
+    /**
+     * Record an update with only the values that changed, and nothing when none did.
+     *
+     * @param  array<string, mixed>  $old
+     * @param  array<string, mixed>  $new
+     */
+    public function recordChanges(Model $auditable, array $old, array $new, ?User $actor = null): void
+    {
+        $changed = array_keys(array_filter(
+            $new,
+            fn (mixed $value, string $key): bool => $value !== ($old[$key] ?? null),
+            ARRAY_FILTER_USE_BOTH,
+        ));
+
+        if ($changed !== []) {
+            $this->record('updated', $auditable, Arr::only($old, $changed), Arr::only($new, $changed), $actor);
+        }
     }
 }

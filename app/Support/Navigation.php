@@ -16,6 +16,7 @@ final class Navigation
      */
     private const array ITEMS = [
         ['group' => 'Storeroom', 'label' => 'Dashboard', 'icon' => 'home', 'route' => 'dashboard', 'active' => 'dashboard', 'permission' => Permission::DashboardView],
+        ['group' => 'Administration', 'label' => 'Users', 'icon' => 'users', 'route' => 'users.index', 'active' => 'users.*', 'permission' => Permission::UsersManage],
     ];
 
     /**
