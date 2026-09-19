@@ -5,6 +5,7 @@ use App\Livewire\Admin;
 use App\Livewire\MasterData\Equipment;
 use App\Livewire\MasterData\StorageLocations;
 use App\Livewire\Parts;
+use App\Livewire\Personnel;
 use App\Livewire\Users;
 use Illuminate\Support\Facades\Route;
 
@@ -35,6 +36,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('equipment', Equipment\Index::class)->name('equipment.index');
     Route::livewire('equipment/create', Equipment\Form::class)->name('equipment.create');
     Route::livewire('equipment/{equipment}/edit', Equipment\Form::class)->name('equipment.edit');
+
+    Route::livewire('personnel', Personnel\Index::class)->name('personnel.index');
+    Route::livewire('personnel/create', Personnel\Form::class)->name('personnel.create');
+    Route::livewire('personnel/{personnel}/edit', Personnel\Form::class)->name('personnel.edit');
 
     Route::livewire('parts', Parts\Index::class)->name('parts.index');
     Route::livewire('parts/create', Parts\Form::class)->name('parts.create');

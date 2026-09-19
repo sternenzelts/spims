@@ -7,8 +7,10 @@ use Database\Factories\PersonnelFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Attributes\Table;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 
 /**
  * A person who receives spare parts. Never signs in (design §3.5). The badge columns are written
@@ -43,5 +45,16 @@ class Personnel extends Model
             'badge_uid_encrypted' => 'encrypted',
             'is_active' => 'boolean',
         ];
+    }
+
+    /**
+     * Trimmed and uppercased: employee numbers are unique as stored, so emp-1 and EMP-1 must not
+     * become two people.
+     *
+     * @return Attribute<string, string>
+     */
+    protected function employeeNo(): Attribute
+    {
+        return Attribute::make(set: fn (string $value): string => Str::upper(trim($value)));
     }
 }
