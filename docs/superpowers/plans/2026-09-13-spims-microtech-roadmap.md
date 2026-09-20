@@ -26,7 +26,7 @@ it covers, and which decisions it must settle.
 |---|---|---|---|---|---|
 | 1 | [Foundation and Stock Ledger](2026-09-13-spims-plan-01-foundation-ledger.md) | sign in; nothing stock-related on screen yet, but the ledger is proven | NFR-001, 003, 005, 013; badge protection of NFR-004; domain parts of FR-004, FR-018 | M1 | Merged 2026-09-19 (`87e922f`) |
 | 2 | [Administration and Master Data](2026-09-19-spims-plan-02-administration-master-data.md) | manage users, install settings, purposes, locations, equipment, parts, stock levels and personnel with badges | FR-001–004, FR-018; NFR-004, 010 | M1, M3 | Merged 2026-09-19 (`c351dd3`) |
-| 2b | Spare Part and Opening Balance Import | import spare parts and opening balances from Excel or CSV, with a dry run | FR-005 | M1, M3 | Outline |
+| 2b | [Spare Part and Opening Balance Import](2026-09-20-spims-plan-02b-import.md) | import spare parts and opening balances from Excel or CSV, with a dry run | FR-005 | M1, M3 | Detailed plan written 2026-09-20 |
 | 3 | Withdrawal and Replenishment at the Station | issue parts with the scan-last flow, including overrides and manual identification; receive stock | FR-006–009; FR-016 (lookup); NFR-006, 007 (drafts), 009 | M2, M3 | Outline |
 | 4 | Corrections and Counting | adjust stock, reverse transactions, enter paper-fallback transactions, run physical counts | FR-010–013 | M3, M6 | Outline |
 | 5 | Analytics, Prediction, Alerts and Dashboard | see consumption, depletion and predicted stock-outs; receive and acknowledge alerts; use the dashboard | FR-014, FR-015, §10 notifications, FR-017 (dashboard) | M4 | Outline |
@@ -170,12 +170,11 @@ This covers steps 4–6 and 8 of the design §3.6 provisioning checklist. Step 7
 
 ## 3b. Plan 2b — Spare Part and Opening Balance Import
 
-Split from Plan 2 so that it can be written in two conditions:
-
-- **Against the spreadsheet library's installed source.** `maatwebsite/excel` 4.0 supports Laravel 13 but reads through PhpSpreadsheet. Its v4 API differs from v3. `openspout/openspout` 5.x is a streaming alternative.
-- **Once Microtech's starting parts list (Q18) is known.**
-
-It is written after Plan 2 merges.
+**Written in full: [2026-09-20-spims-plan-02b-import.md](2026-09-20-spims-plan-02b-import.md), seven tasks.** It was
+written against `master` at `58a01c5` and against `openspout/openspout` 5.11's installed source. Q18, Microtech's
+starting parts list, is still unanswered; the plan absorbs that by matching a file's header row to its columns by
+label or alias, and letting the user re-match every column on screen, so a differently laid-out list needs no code
+change. What remains for Q18 is adding whatever spellings that list uses to `ImportColumn::aliases()`.
 
 **Outcome.** A System Administrator, or a supervisor where permitted, imports spare parts and opening balances from an Excel or CSV file with a dry run. This is design §3.6 provisioning checklist step 7.
 
@@ -197,14 +196,16 @@ It is written after Plan 2 merges.
 - An opening balance for a part that already has movements is refused.
 - A confirmed import leaves `ledger:verify` clean.
 
-**Decisions to settle when writing the detailed plan.**
+**Decisions settled when the plan was written.**
 
-- The spreadsheet library, chosen after reading its installed source.
-- The import column contract and template file. This needs the Q18 answer on Microtech's starting parts list. Without it, default to the `parts` columns plus location code, equipment codes and opening quantity, and let the mapping step absorb a differently shaped file.
-- The batch size for opening-balance transactions, so a 5,000-part import does not hold thousands of row locks in one transaction. The working default is 200 lines per transaction.
-- Whether a confirmed import is all or nothing, or resumable batch by batch.
+- **The spreadsheet library is `openspout/openspout` ^5.11**, not `maatwebsite/excel` 4: it streams a sheet row by row and writes the template, and local PHP is capped at 128 MB. Plan 6 still chooses its export library separately.
+- **The column contract is twelve columns**: the spare part fields plus storage location code, equipment codes and opening quantity. Part number, description and unit of measure are required on every row. A file's header row is matched by label or alias, and every column can be re-matched on screen.
+- **200 lines per opening transaction**, as the working default said.
+- **A confirmed import is all or nothing**: it runs in one database transaction, after checking the file again, so resuming half an import is never needed.
+- **Checking runs in the request; writing runs on the queue** (`ConfirmImport`, one attempt, 30-minute timeout), and the review screen polls.
+- Plan 2's carried note is folded in as Task 7: withdrawal purpose names become unique ignoring case.
 
-**Open questions that affect it:** Q18 starting parts list.
+**Open questions that affect it:** Q18 starting parts list, now only for column aliases.
 
 ---
 
@@ -461,7 +462,7 @@ These run alongside the plans, following design §14 (proposal Phases 1, 3, 4 an
 
 | When | Item | Owner | PRD question |
 |---|---|---|---|
-| Before Plan 2b is written | Confirm the starting parts list and its columns | Microtech storeroom | Q18 |
+| Before Plan 2b is executed | Confirm the starting parts list and its columns, so its spellings are added to the import column aliases | Microtech storeroom | Q18 |
 | Before Plan 2 is finished | Equipment list, or plan to build it | Microtech maintenance | Q6 |
 | Before Plan 3 is finished | Badge technology; buy a keyboard-wedge reader (13.56 MHz MIFARE DESFire if badges are new) | Microtech IT | Q1 |
 | Before Plan 3 is finished | Supervisor coverage on night shifts | Microtech storeroom | Q11, Q12 |
@@ -485,4 +486,4 @@ These are deliberately left to the plan that owns them, and recorded here so the
 | The inventory discrepancy alert is raised before the `alerts` table exists; resolved with an event that Plan 5 handles | Plans 3 → 5 |
 | A transaction origin marker, so override and count adjustments are identifiable as non-reversible | Plan 4 |
 | The transaction type used by count postings | Plan 4 |
-| The batch size for opening-balance imports | Plan 2b |
+| The batch size for opening-balance imports | Plan 2b — settled: 200 lines per `opening` transaction |
