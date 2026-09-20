@@ -4,9 +4,13 @@ namespace App\Domain\Imports;
 
 use App\Domain\Audit\AuditLogger;
 use App\Domain\Imports\Exceptions\ImportRefused;
+use App\Domain\Ledger\Exceptions\StockBusy;
 use App\Enums\ImportStatus;
+use App\Jobs\ConfirmImport;
 use App\Models\ImportBatch;
 use App\Models\User;
+use DomainException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -22,6 +26,7 @@ final readonly class PartImports
     public function __construct(
         private AuditLogger $audit,
         private ImportValidator $validator,
+        private ImportWriter $writer,
     ) {}
 
     /**
@@ -96,6 +101,78 @@ final readonly class PartImports
         });
     }
 
+    /**
+     * Queue the import of a checked batch (PRD FR-SPIMS-005 step 6). The confirmation is recorded
+     * first, so the screen shows the import running and a second click cannot queue it twice.
+     *
+     * @throws ImportRefused
+     */
+    public function requestConfirmation(ImportBatch $batch, User $actor): void
+    {
+        DB::transaction(function () use ($batch): void {
+            $locked = $this->lockOpen($batch);
+
+            if ($locked->status !== ImportStatus::Validated) {
+                throw ImportRefused::notValidated();
+            }
+
+            $locked->forceFill(['confirmed_at' => now()])->save();
+        });
+
+        ConfirmImport::dispatch($batch->id, $actor->id);
+    }
+
+    /**
+     * Write a confirmed batch: every part and every opening balance, or nothing (PRD FR-SPIMS-005
+     * steps 7–9). The file is checked again first, because parts or stock may have changed since
+     * the preview. On any failure the batch is left Failed with the reason, and can be checked again.
+     */
+    public function confirm(ImportBatch $batch, User $actor): void
+    {
+        try {
+            DB::transaction(function () use ($batch, $actor): void {
+                $locked = ImportBatch::query()->whereKey($batch->id)->lockForUpdate()->firstOrFail();
+
+                // Already written, cancelled or never confirmed: a repeated or stray job does nothing.
+                if (! $locked->isImporting()) {
+                    return;
+                }
+
+                $preview = $this->validator->validate($locked, $actor);
+
+                if (! $preview->isValid()) {
+                    $this->recordPreview($locked, $preview);
+                    $locked->forceFill(['confirmed_at' => null])->save();
+
+                    return;
+                }
+
+                $written = $this->writer->write($preview, $actor);
+
+                $locked->forceFill([
+                    'status' => ImportStatus::Completed,
+                    'rows_total' => $preview->rowsTotal,
+                    'rows_created' => $written['created'],
+                    'rows_updated' => $written['updated'],
+                    'opening_balances' => $written['opening_balances'],
+                    'completed_at' => now(),
+                ])->save();
+
+                $this->audit->record('imported', $locked, null, [
+                    'filename' => $locked->filename,
+                    'rows_total' => $preview->rowsTotal,
+                    'rows_created' => $written['created'],
+                    'rows_updated' => $written['updated'],
+                    'opening_balances' => $written['opening_balances'],
+                ], $actor);
+            });
+        } catch (Throwable $exception) {
+            $this->markFailed($batch, $exception);
+
+            throw $exception;
+        }
+    }
+
     private function recordPreview(ImportBatch $batch, ImportPreview $preview): void
     {
         $batch->forceFill([
@@ -108,6 +185,28 @@ final readonly class PartImports
             'errors' => $preview->errors,
             'warnings' => $preview->warnings,
             'preview' => $preview->sample(),
+        ])->save();
+    }
+
+    /**
+     * Record why an import stopped. Its transaction has rolled back, so this is saved on its own.
+     * A refusal from a domain service explains itself; any other message may hold SQL, so it stays
+     * in the application log, where the queue worker reports it.
+     */
+    private function markFailed(ImportBatch $batch, Throwable $exception): void
+    {
+        $reason = match (true) {
+            $exception instanceof DomainException, $exception instanceof StockBusy => $exception->getMessage(),
+            // PartRecords checks part numbers before saving, so only a part saved at the same
+            // moment by a screen or another import reaches the unique index (Plan 2 carried note).
+            $exception instanceof UniqueConstraintViolationException => 'a spare part in the file was created elsewhere at the same moment. Check the file again, and that row will update it instead.',
+            default => 'an unexpected error, recorded in the application log.',
+        };
+
+        ImportBatch::query()->findOrFail($batch->id)->forceFill([
+            'status' => ImportStatus::Failed,
+            'confirmed_at' => null,
+            'errors' => [['row' => 0, 'message' => "The import stopped and nothing was saved: {$reason}"]],
         ])->save();
     }
 

@@ -65,6 +65,14 @@ class ImportBatch extends Model
     }
 
     /**
+     * Confirmed and waiting for, or being written by, the ConfirmImport job.
+     */
+    public function isImporting(): bool
+    {
+        return $this->status === ImportStatus::Validated && $this->confirmed_at !== null;
+    }
+
+    /**
      * @return BelongsTo<User, $this>
      */
     public function importedBy(): BelongsTo

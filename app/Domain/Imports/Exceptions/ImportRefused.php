@@ -47,4 +47,9 @@ final class ImportRefused extends DomainException
     {
         return new self("Column \"{$header}\" is matched to more than one field.", 'mapping');
     }
+
+    public static function notValidated(): self
+    {
+        return new self('Check the file, and fix every error, before importing it.', 'batch');
+    }
 }
