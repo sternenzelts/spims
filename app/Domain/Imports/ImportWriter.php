@@ -49,6 +49,10 @@ final readonly class ImportWriter
             }
         }
 
+        // Ascending part id across every chunk, so an import takes its stock locks in the same
+        // order as every other posting and cannot deadlock against a station (design §5.2).
+        usort($openingBalances, fn (array $first, array $second): int => $first[0] <=> $second[0]);
+
         foreach (array_chunk($openingBalances, $this->linesPerTransaction) as $lines) {
             $this->postOpeningBalances($lines, $actor);
         }
