@@ -4,7 +4,7 @@
         {{ __('Upload an .xlsx or .csv file with a header row naming its columns and one spare part per row. Nothing is saved until you check the file and confirm the import.') }}
     </flux:text>
 
-    <form wire:submit="upload" class="space-y-6">
+    <form wire:submit="save" class="space-y-6">
         <flux:input type="file" wire:model="file" :label="__('File')" accept=".xlsx,.csv" />
 
         <div class="flex flex-wrap gap-4">

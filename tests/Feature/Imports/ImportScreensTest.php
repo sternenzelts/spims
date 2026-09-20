@@ -41,7 +41,7 @@ it('uploads a file, matches its columns, checks it and imports it', function () 
 
     $upload = Livewire::actingAs($admin)->test(Upload::class)
         ->set('file', UploadedFile::fake()->createWithContent('parts.csv', "Item code,Item description,UOM,Qty\nBRG-6204,Deep groove ball bearing,pcs,12\n"))
-        ->call('upload')
+        ->call('save')
         ->assertHasNoErrors();
 
     $batch = ImportBatch::query()->sole();
@@ -66,7 +66,7 @@ it('uploads a file, matches its columns, checks it and imports it', function () 
 it('refuses a file that is not an xlsx or csv file', function () {
     Livewire::actingAs(userWithRoles(Role::Supervisor))->test(Upload::class)
         ->set('file', UploadedFile::fake()->createWithContent('parts.ods', 'content'))
-        ->call('upload')
+        ->call('save')
         ->assertHasErrors('file')
         ->assertSee('Upload an .xlsx or .csv file.');
 

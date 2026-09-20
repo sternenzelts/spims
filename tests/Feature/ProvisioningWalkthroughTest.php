@@ -52,7 +52,7 @@ it('provisions an install through the screens alone: design §3.6 steps 4 to 8',
             "Part number,Description,Unit of measure,Storage location code,Equipment codes,Criticality,Reorder point,Minimum level,Critical level,Opening quantity\n".
             "BRG-6204,Deep groove ball bearing,pcs,A-01,CNC-01,critical,10,4,2,12\n",
         ))
-        ->call('upload')
+        ->call('save')
         ->assertHasNoErrors();
 
     // The sync queue in tests writes the import during the import call.

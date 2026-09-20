@@ -57,8 +57,8 @@ dataset('reauthorized actions', [
     'Personnel\Form::enrollBadge' => [
         Role::Supervisor, PersonnelForm::class, fn () => ['personnel' => Personnel::factory()->create()], 'enrollBadge', fn () => [],
     ],
-    'Imports\Upload::upload' => [
-        Role::Supervisor, ImportUpload::class, fn () => [], 'upload', fn () => [],
+    'Imports\Upload::save' => [
+        Role::Supervisor, ImportUpload::class, fn () => [], 'save', fn () => [],
     ],
     'Imports\Review::check' => [
         Role::Supervisor, ImportReview::class, fn () => ['batch' => ImportBatch::factory()->create()], 'check', fn () => [],

@@ -24,7 +24,7 @@ class Upload extends Component
         $this->authorize(Permission::PartsImport);
     }
 
-    public function upload(PartImports $imports): void
+    public function save(PartImports $imports): void
     {
         $this->authorize(Permission::PartsImport);
 
