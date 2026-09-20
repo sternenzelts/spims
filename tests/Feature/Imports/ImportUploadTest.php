@@ -6,6 +6,8 @@ use App\Enums\ImportStatus;
 use App\Enums\Role;
 use App\Models\AuditLog;
 use App\Models\ImportBatch;
+use App\Models\User;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use OpenSpout\Common\Entity\Row;
@@ -72,6 +74,17 @@ it('cannot cancel a batch that is already imported or cancelled', function (Impo
 
     expect(fn () => app(PartImports::class)->cancel($batch, $this->admin))->toThrow(ImportRefused::class);
 })->with([ImportStatus::Completed, ImportStatus::Cancelled]);
+
+it('deletes the stored file when creating the batch row fails', function () {
+    $unsavedActor = User::factory()->make();
+
+    expect(inSavepoint(fn () => app(PartImports::class)->upload(
+        UploadedFile::fake()->createWithContent('parts.csv', "Part number,Description,Unit of measure\nBRG-6204,Bearing,pcs\n"),
+        $unsavedActor,
+    )))->toThrow(QueryException::class);
+
+    expect(Storage::allFiles('imports'))->toBe([]);
+});
 
 it('leaves no temporary copy of the file behind', function () {
     $copies = fn (): array => glob(sys_get_temp_dir().'/spims-import-*') ?: [];

@@ -69,15 +69,21 @@ final readonly class PartImports
             throw ImportRefused::empty();
         }
 
-        $batch = ImportBatch::query()->forceCreate([
-            'filename' => $file->getClientOriginalName(),
-            'format' => $format,
-            'storage_path' => $storagePath,
-            'status' => ImportStatus::Pending,
-            'headers' => $headers,
-            'column_map' => ImportColumn::guessMap($headers),
-            'imported_by_user_id' => $actor->id,
-        ]);
+        try {
+            $batch = ImportBatch::query()->forceCreate([
+                'filename' => $file->getClientOriginalName(),
+                'format' => $format,
+                'storage_path' => $storagePath,
+                'status' => ImportStatus::Pending,
+                'headers' => $headers,
+                'column_map' => ImportColumn::guessMap($headers),
+                'imported_by_user_id' => $actor->id,
+            ]);
+        } catch (Throwable $exception) {
+            Storage::delete($storagePath);
+
+            throw $exception;
+        }
 
         // Read back the database defaults (counts, errors, preview).
         return $batch->refresh();
