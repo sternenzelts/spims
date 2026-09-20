@@ -690,6 +690,8 @@ use App\Enums\ImportStatus;
 use App\Enums\Role;
 use App\Models\AuditLog;
 use App\Models\ImportBatch;
+use App\Models\User;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use OpenSpout\Common\Entity\Row;
@@ -756,6 +758,17 @@ it('cannot cancel a batch that is already imported or cancelled', function (Impo
 
     expect(fn () => app(PartImports::class)->cancel($batch, $this->admin))->toThrow(ImportRefused::class);
 })->with([ImportStatus::Completed, ImportStatus::Cancelled]);
+
+it('deletes the stored file when creating the batch row fails', function () {
+    $unsavedActor = User::factory()->make();
+
+    expect(inSavepoint(fn () => app(PartImports::class)->upload(
+        UploadedFile::fake()->createWithContent('parts.csv', "Part number,Description,Unit of measure\nBRG-6204,Bearing,pcs\n"),
+        $unsavedActor,
+    )))->toThrow(QueryException::class);
+
+    expect(Storage::allFiles('imports'))->toBe([]);
+});
 
 it('leaves no temporary copy of the file behind', function () {
     $copies = fn (): array => glob(sys_get_temp_dir().'/spims-import-*') ?: [];
@@ -1050,7 +1063,12 @@ final class ImportFile
             // first. Windows refuses to delete a file that is still open.
             gc_collect_cycles();
 
-            unlink($path);
+            // As in rows(): a failed unlink must not raise, or it would replace the header row this
+            // finally is returning with an ErrorException, reporting a perfectly readable file as
+            // unreadable.
+            if (is_file($path)) {
+                @unlink($path);
+            }
         }
     }
 
@@ -1173,15 +1191,21 @@ final readonly class PartImports
             throw ImportRefused::empty();
         }
 
-        $batch = ImportBatch::query()->forceCreate([
-            'filename' => $file->getClientOriginalName(),
-            'format' => $format,
-            'storage_path' => $storagePath,
-            'status' => ImportStatus::Pending,
-            'headers' => $headers,
-            'column_map' => ImportColumn::guessMap($headers),
-            'imported_by_user_id' => $actor->id,
-        ]);
+        try {
+            $batch = ImportBatch::query()->forceCreate([
+                'filename' => $file->getClientOriginalName(),
+                'format' => $format,
+                'storage_path' => $storagePath,
+                'status' => ImportStatus::Pending,
+                'headers' => $headers,
+                'column_map' => ImportColumn::guessMap($headers),
+                'imported_by_user_id' => $actor->id,
+            ]);
+        } catch (Throwable $exception) {
+            Storage::delete($storagePath);
+
+            throw $exception;
+        }
 
         // Read back the database defaults (counts, errors, preview).
         return $batch->refresh();
@@ -1212,7 +1236,10 @@ final readonly class PartImports
     {
         $locked = ImportBatch::query()->whereKey($batch->id)->lockForUpdate()->firstOrFail();
 
-        if (! $locked->status->isOpen() || $locked->confirmed_at !== null) {
+        // A job that dies before reaching confirm()'s own catch, or whose dispatch() never reached
+        // the queue at all, otherwise leaves confirmed_at set forever: once the batch is stalled,
+        // let a person check, import or cancel it again.
+        if (! $locked->status->isOpen() || ($locked->confirmed_at !== null && ! $locked->isStalled())) {
             throw ImportRefused::notOpen();
         }
 
@@ -1228,7 +1255,7 @@ php artisan migrate
 php artisan test tests/Feature/Imports/ImportUploadTest.php tests/Feature/SchemaConventionsTest.php
 ```
 
-Expected: PASS. `ImportUploadTest` contributes 9 tests, and `SchemaConventionsTest` accepts the new table.
+Expected: PASS. `ImportUploadTest` contributes 10 tests, and `SchemaConventionsTest` accepts the new table.
 
 - [ ] **Step 6: Run the full check and commit**
 
@@ -1437,6 +1464,29 @@ it('refuses a file with a header row only', function () {
     expect(($this->messages)($batch))->toBe(['0: The file has no rows below its header.']);
 });
 
+it('refuses a file with more rows than the configured maximum, writing nothing', function () {
+    $csv = "Part number,Description,Unit of measure\n".str_repeat("P,Part,pcs\n", 10_001);
+    $batch = uploadImport($csv, $this->admin);
+
+    ($this->check)($batch);
+
+    expect(($this->messages)($batch))->toBe(['0: The file has more than 10,000 rows below its header. Split it into smaller files and import each one.'])
+        ->and(Part::query()->count())->toBe(0);
+});
+
+it('keeps at most 500 errors, with a final row saying how many more there are', function () {
+    $csv = "Part number,Description,Unit of measure\n".str_repeat(",Missing part number,pcs\n", 600);
+    $batch = uploadImport($csv, $this->admin);
+
+    ($this->check)($batch);
+    $batch->refresh();
+
+    expect($batch->status)->toBe(ImportStatus::Failed)
+        ->and($batch->rows_failed)->toBe(600)
+        ->and($batch->errors)->toHaveCount(501)
+        ->and($batch->errors[500])->toBe(['row' => 0, 'message' => '100 more errors are not shown. Fix these, then check the file again to see the rest.']);
+});
+
 it('refuses a mapping that leaves out a required column or gives one column two fields', function () {
     $batch = uploadImport("Item,Name,Unit\nBRG-6204,Bearing,pcs\n", $this->admin);
     $imports = app(PartImports::class);
@@ -1608,6 +1658,9 @@ final readonly class ImportValidator
 
     private const string QUANTITY_MESSAGE = 'must be a number of zero or more, with at most three decimal places.';
 
+    /** The most data rows one import may hold below its header. */
+    private const int MAX_ROWS = 10_000;
+
     public function __construct(
         private StockLevels $stockLevels,
         private InstallSettings $settings,
@@ -1615,7 +1668,18 @@ final readonly class ImportValidator
 
     public function validate(ImportBatch $batch, User $actor): ImportPreview
     {
-        $rows = iterator_to_array(ImportFile::rows($batch->storage_path, $batch->format));
+        $rows = [];
+
+        foreach (ImportFile::rows($batch->storage_path, $batch->format) as $rowNumber => $cells) {
+            $rows[$rowNumber] = $cells;
+
+            // The header row plus MAX_ROWS data rows: stop reading rather than hold a much larger
+            // file whole, so an oversized upload becomes this message instead of a blank 500.
+            if (count($rows) > self::MAX_ROWS + 1) {
+                return new ImportPreview([], 0, [['row' => 0, 'message' => 'The file has more than '.number_format(self::MAX_ROWS).' rows below its header. Split it into smaller files and import each one.']], []);
+            }
+        }
+
         unset($rows[array_key_first($rows)]);
 
         if ($rows === []) {
@@ -1901,9 +1965,12 @@ Add these refusals to `app/Domain/Imports/Exceptions/ImportRefused.php`:
 
 In `app/Domain/Imports/PartImports.php`:
 
-1. Change the constructor to:
+1. Add this constant, and change the constructor to:
 
 ```php
+    /** The most errors kept on a batch: Imports\Index hydrates every batch's errors for its page. */
+    private const int MAX_ERRORS = 500;
+
     public function __construct(
         private AuditLogger $audit,
         private ImportValidator $validator,
@@ -1939,14 +2006,23 @@ In `app/Domain/Imports/PartImports.php`:
 
     private function recordPreview(ImportBatch $batch, ImportPreview $preview): void
     {
+        $errors = $preview->errors;
+
+        if (count($errors) > self::MAX_ERRORS) {
+            $left = count($errors) - self::MAX_ERRORS;
+            $errors = array_slice($errors, 0, self::MAX_ERRORS);
+            $errors[] = ['row' => 0, 'message' => "{$left} more errors are not shown. Fix these, then check the file again to see the rest."];
+        }
+
         $batch->forceFill([
             'status' => $preview->isValid() ? ImportStatus::Validated : ImportStatus::Failed,
             'rows_total' => $preview->rowsTotal,
             'rows_created' => $preview->creates(),
             'rows_updated' => $preview->updates(),
+            // The true count of failed rows, from the full list: the truncation above is display-only.
             'rows_failed' => $preview->failedRows(),
             'opening_balances' => $preview->openingBalances(),
-            'errors' => $preview->errors,
+            'errors' => $errors,
             'warnings' => $preview->warnings,
             'preview' => $preview->sample(),
         ])->save();
@@ -1998,7 +2074,7 @@ In `app/Domain/Imports/PartImports.php`:
 php artisan test tests/Feature/Imports
 ```
 
-Expected: PASS. `ImportCheckTest` contributes 10 tests.
+Expected: PASS. `ImportCheckTest` contributes 12 tests.
 
 - [ ] **Step 7: Run the full check and commit**
 
@@ -2027,7 +2103,7 @@ git commit -m "Check every row of a spare part import before anything is written
     - `requestConfirmation(ImportBatch $batch, User $actor): void`, which records `confirmed_at` and queues `ConfirmImport`.
     - `confirm(ImportBatch $batch, User $actor): void`, which is run by the job.
   - `ConfirmImport` with public `$batchId` and `$actorId`.
-  - `ImportBatch::isImporting(): bool`, true from confirmation until the job ends.
+  - `ImportBatch::isImporting(): bool`, true from confirmation until the job ends, and `isStalled(): bool`, true once that confirmation is older than `ConfirmImport::TIMEOUT`.
   - The `imported` audit event on `import_batch`.
 
 A failed import leaves its batch Failed with `confirmed_at` cleared. The user can then check it again with a corrected mapping, or upload a corrected file.
@@ -2055,9 +2131,11 @@ use App\Models\Part;
 use App\Models\StockMovement;
 use App\Models\StockTransaction;
 use App\Models\StorageLocation;
+use Illuminate\Database\DeadlockException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Spatie\Permission\PermissionRegistrar;
 
 beforeEach(function () {
     Storage::fake();
@@ -2170,6 +2248,21 @@ it('writes nothing when the import fails part-way, and records why', function (C
     ],
 ]);
 
+it('records a deadlock against another import as its own reason', function () {
+    // Thrown from within Part::created() as this test's dataset above does, a manufactured
+    // DeadlockException confuses Laravel's own nested-transaction concurrency handling (it assumes
+    // the database has already aborted the whole transaction, which a manufactured exception has
+    // not done), so markFailed() is exercised directly instead of through confirm()'s transaction.
+    $batch = ($this->checked)("Part number,Description,Unit of measure\nP-1,One,pcs\n");
+
+    app(PartImports::class)->markFailed($batch, new DeadlockException('deadlock detected while inserting into "parts" …', 0, new Exception('deadlock detected')));
+
+    expect($batch->refresh())
+        ->status->toBe(ImportStatus::Failed)
+        ->confirmed_at->toBeNull()
+        ->errors->toBe([['row' => 0, 'message' => 'The import stopped and nothing was saved: another import was writing the same spare parts at the same moment. Check the file again.']]);
+});
+
 it('imports a batch only after it passed its check, and only once', function () {
     $imports = app(PartImports::class);
     $batch = uploadImport("Part number,Description,Unit of measure\nP-1,One,pcs\n", $this->admin);
@@ -2222,6 +2315,58 @@ it('locks opening balances in ascending part id order to avoid deadlock', functi
     // Ascending by part id across both transactions, not merely inside each one.
     expect($posted)->toBe([$third->id, $second->id, $first->id])
         ->and(StockTransaction::query()->where('type', 'opening')->count())->toBe(2);
+});
+
+it('marks a batch Failed when the confirm job never finishes, and it can be checked again', function () {
+    Queue::fake();
+    $batch = ($this->checked)("Part number,Description,Unit of measure\nP-1,One,pcs\n");
+    app(PartImports::class)->requestConfirmation($batch, $this->admin);
+
+    // Simulates the worker calling the failed() hook without ever reaching confirm()'s own catch:
+    // an out-of-memory kill, a worker restart, or the job's own timeout.
+    (new ConfirmImport($batch->id, $this->admin->id))->failed(null);
+
+    expect($batch->refresh())
+        ->status->toBe(ImportStatus::Failed)
+        ->confirmed_at->toBeNull()
+        ->errors->toBe([['row' => 0, 'message' => 'The import stopped and nothing was saved: an unexpected error, recorded in the application log.']]);
+
+    $preview = app(PartImports::class)->check($batch, $batch->column_map, $this->admin);
+
+    expect($preview->isValid())->toBeTrue()
+        ->and($batch->refresh()->status)->toBe(ImportStatus::Validated);
+});
+
+it('refuses to write when the actor no longer has permission to import, and records why', function () {
+    Queue::fake();
+    $batch = ($this->checked)("Part number,Description,Unit of measure\nP-1,One,pcs\n");
+    app(PartImports::class)->requestConfirmation($batch, $this->admin);
+
+    $this->admin->syncRoles([]);
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+    app(PartImports::class)->confirm($batch, $this->admin);
+
+    expect($batch->refresh())
+        ->status->toBe(ImportStatus::Failed)
+        ->confirmed_at->toBeNull()
+        ->errors->toBe([['row' => 0, 'message' => 'You no longer have permission to import spare parts, so nothing was saved.']])
+        ->and(Part::query()->exists())->toBeFalse();
+});
+
+it('lets a batch whose confirmation is older than the job timeout be cancelled, but not one confirmed a moment ago', function () {
+    Queue::fake();
+    $batch = ($this->checked)("Part number,Description,Unit of measure\nP-1,One,pcs\n");
+    app(PartImports::class)->requestConfirmation($batch, $this->admin);
+
+    expect(fn () => app(PartImports::class)->cancel($batch, $this->admin))
+        ->toThrow(ImportRefused::class);
+
+    $this->travel(ConfirmImport::TIMEOUT + 1)->seconds();
+
+    app(PartImports::class)->cancel($batch, $this->admin);
+
+    expect($batch->refresh()->status)->toBe(ImportStatus::Cancelled);
 });
 ```
 
@@ -2364,6 +2509,8 @@ use App\Models\ImportBatch;
 use App\Models\User;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use RuntimeException;
+use Throwable;
 
 /**
  * Writes a confirmed spare part import (PRD FR-SPIMS-005). Queued, because writing thousands of
@@ -2376,8 +2523,10 @@ class ConfirmImport implements ShouldQueue
     /** One attempt: an import is all or nothing, so a failed one goes back to a person, not a retry. */
     public int $tries = 1;
 
-    /** Seconds. */
-    public int $timeout = 1800;
+    /** Seconds. PartImports::lockOpen() treats a confirmation older than this as stuck. */
+    public const int TIMEOUT = 1800;
+
+    public int $timeout = self::TIMEOUT;
 
     public function __construct(
         public int $batchId,
@@ -2391,12 +2540,25 @@ class ConfirmImport implements ShouldQueue
             User::query()->findOrFail($this->actorId),
         );
     }
+
+    /**
+     * Leave the batch a person can act on again when the job itself never reaches confirm()'s own
+     * catch: a worker killed by an out-of-memory condition, a worker restart, the timeout above, or
+     * a dispatch() that never reached the queue at all.
+     */
+    public function failed(?Throwable $exception): void
+    {
+        app(PartImports::class)->markFailed(
+            ImportBatch::query()->findOrFail($this->batchId),
+            $exception ?? new RuntimeException('The import did not finish. The queue worker stopped before it could report a reason.'),
+        );
+    }
 }
 ```
 
 - [ ] **Step 4: Add confirmation to the service**
 
-Add this method to `app/Models/ImportBatch.php`, after `casts()`:
+Add `use App\Jobs\ConfirmImport;` to `app/Models/ImportBatch.php`'s imports, and these methods after `casts()`:
 
 ```php
     /**
@@ -2405,6 +2567,17 @@ Add this method to `app/Models/ImportBatch.php`, after `casts()`:
     public function isImporting(): bool
     {
         return $this->status === ImportStatus::Validated && $this->confirmed_at !== null;
+    }
+
+    /**
+     * Importing, but past the job's own timeout: the job never reported back, so it cannot still
+     * be running.
+     */
+    public function isStalled(): bool
+    {
+        return $this->isImporting()
+            && $this->confirmed_at !== null
+            && $this->confirmed_at->addSeconds(ConfirmImport::TIMEOUT)->isPast();
     }
 ```
 
@@ -2419,7 +2592,7 @@ Add this refusal to `app/Domain/Imports/Exceptions/ImportRefused.php`:
 
 In `app/Domain/Imports/PartImports.php`:
 
-1. Add `use App\Domain\Ledger\Exceptions\StockBusy;`, `use App\Jobs\ConfirmImport;`, `use DomainException;` and `use Illuminate\Database\UniqueConstraintViolationException;` to the imports.
+1. Add `use App\Domain\Ledger\Exceptions\StockBusy;`, `use App\Enums\Permission;`, `use App\Jobs\ConfirmImport;`, `use DomainException;`, `use Illuminate\Database\DeadlockException;`, `use Illuminate\Database\QueryException;` and `use Illuminate\Database\UniqueConstraintViolationException;` to the imports.
 2. Add `private ImportWriter $writer,` to the constructor, after `$validator`.
 3. Add these methods after `check()`:
 
@@ -2458,6 +2631,16 @@ In `app/Domain/Imports/PartImports.php`:
 
                 // Already written, cancelled or never confirmed: a repeated or stray job does nothing.
                 if (! $locked->isImporting()) {
+                    return;
+                }
+
+                // The column permissions are re-checked below through the validator, but not this
+                // one: an actor whose import permission was revoked after clicking Import must not
+                // have it written anyway.
+                if (! $actor->can(Permission::PartsImport)) {
+                    $this->recordPreview($locked, new ImportPreview([], 0, [['row' => 0, 'message' => 'You no longer have permission to import spare parts, so nothing was saved.']], []));
+                    $locked->forceFill(['confirmed_at' => null])->save();
+
                     return;
                 }
 
@@ -2503,15 +2686,21 @@ In `app/Domain/Imports/PartImports.php`:
     /**
      * Record why an import stopped. Its transaction has rolled back, so this is saved on its own.
      * A refusal from a domain service explains itself; any other message may hold SQL, so it stays
-     * in the application log, where the queue worker reports it.
+     * in the application log, where the queue worker reports it. Public: ConfirmImport::failed()
+     * calls this too, for a job that dies without reaching confirm()'s own catch.
      */
-    private function markFailed(ImportBatch $batch, Throwable $exception): void
+    public function markFailed(ImportBatch $batch, Throwable $exception): void
     {
         $reason = match (true) {
             $exception instanceof DomainException, $exception instanceof StockBusy => $exception->getMessage(),
             // PartRecords checks part numbers before saving, so only a part saved at the same
             // moment by a screen or another import reaches the unique index (Plan 2 carried note).
             $exception instanceof UniqueConstraintViolationException => 'a spare part in the file was created elsewhere at the same moment. Check the file again, and that row will update it instead.',
+            // Postgres SQLSTATE 40P01. A deadlock inside a transaction nested under this one (any
+            // part write, any opening posting) surfaces as DeadlockException, whose own getCode() is
+            // not the SQLSTATE (Laravel resets it); one at this transaction's own level surfaces as
+            // the underlying QueryException, whose getCode() still is.
+            $exception instanceof DeadlockException, $exception instanceof QueryException && $exception->getCode() === '40P01' => 'another import was writing the same spare parts at the same moment. Check the file again.',
             default => 'an unexpected error, recorded in the application log.',
         };
 
@@ -2529,7 +2718,7 @@ In `app/Domain/Imports/PartImports.php`:
 php artisan test tests/Feature/Imports
 ```
 
-Expected: PASS. `ImportConfirmationTest` contributes 9 tests: 7 cases, one of them run three times by its dataset.
+Expected: PASS. `ImportConfirmationTest` contributes 13 tests: 11 cases, one of them run three times by its dataset.
 
 - [ ] **Step 6: Run the full check and commit**
 
@@ -2554,7 +2743,7 @@ git commit -m "Import checked spare parts and opening balances in one all-or-not
 **Interfaces:**
 - Consumes:
   - `PartImports::upload()`, `check()`, `requestConfirmation()` and `cancel()`, and `ImportRefused` with its `$field` (Tasks 2–4).
-  - `ImportColumn` (Task 1), `ImportBatch::isImporting()` (Task 4).
+  - `ImportColumn` (Task 1), `ImportBatch::isImporting()` and `isStalled()` (Task 4).
   - `ActsAsSignedInUser`, `InstallSettings::timezone()`, and `Permission::PartsImport`, held by Supervisor and System Administrator.
 - Produces:
   - Routes:
@@ -2590,6 +2779,7 @@ Create `tests/Feature/Imports/ImportScreensTest.php`:
 
 use App\Enums\ImportStatus;
 use App\Enums\Role;
+use App\Jobs\ConfirmImport;
 use App\Livewire\Imports\Index;
 use App\Livewire\Imports\Review;
 use App\Livewire\Imports\Upload;
@@ -2700,7 +2890,28 @@ it('shows a running import and refreshes until it ends', function () {
         ->call('check')
         ->call('import')
         ->assertSee('The import is running.')
-        ->assertSeeHtml('wire:poll.2s');
+        ->assertSeeHtml('wire:poll.2s')
+        ->assertDontSeeHtml('wire:click="cancel"');
+});
+
+it('lets a stalled import be cancelled from the screen', function () {
+    Queue::fake();
+    $admin = userWithRoles(Role::Admin);
+    $batch = uploadImport("Part number,Description,Unit of measure\nP-1,One,pcs\n", $admin);
+
+    Livewire::actingAs($admin)->test(Review::class, ['batch' => $batch])
+        ->call('check')
+        ->call('import');
+
+    $this->travel(ConfirmImport::TIMEOUT + 1)->seconds();
+
+    Livewire::actingAs($admin)->test(Review::class, ['batch' => $batch])
+        ->assertSee('has not reported back')
+        ->assertSeeHtml('wire:click="cancel"')
+        ->assertDontSeeHtml('wire:poll.2s')
+        ->call('cancel');
+
+    expect($batch->refresh()->status)->toBe(ImportStatus::Cancelled);
 });
 
 it('cancels an import at the preview, writing nothing', function () {
@@ -3113,13 +3324,20 @@ Create `resources/views/livewire/imports/review.blade.php`:
 
     <flux:error name="batch" />
 
-    @if ($batch->isImporting())
+    @if ($batch->isImporting() && ! $batch->isStalled())
         <div wire:poll.2s>
             <flux:callout icon="arrow-path">
                 <flux:callout.heading>{{ __('The import is running.') }}</flux:callout.heading>
                 <flux:callout.text>{{ __('This page updates when it finishes. You can leave it and come back.') }}</flux:callout.text>
             </flux:callout>
         </div>
+    @elseif ($batch->isStalled())
+        <flux:callout variant="warning" icon="exclamation-triangle">
+            <flux:callout.heading>{{ __('The import has not reported back.') }}</flux:callout.heading>
+            <flux:callout.text>{{ __('Nothing has been written. The queue worker may not be running.') }}</flux:callout.text>
+        </flux:callout>
+
+        <flux:button wire:click="cancel" wire:confirm="{{ __('Cancel this import? Nothing will be saved.') }}">{{ __('Cancel import') }}</flux:button>
     @elseif ($batch->status === \App\Enums\ImportStatus::Completed)
         <flux:callout variant="success" icon="check-circle">
             <flux:callout.heading>{{ __('Imported') }}</flux:callout.heading>
@@ -3256,7 +3474,7 @@ Create `resources/views/livewire/imports/review.blade.php`:
 php artisan test tests/Feature/Imports
 ```
 
-Expected: PASS. `ImportScreensTest` contributes 12 tests: 9 cases, the first run once per role.
+Expected: PASS. `ImportScreensTest` contributes 13 tests: 10 cases, the first run once per role.
 
 - [ ] **Step 8: Run the full check and commit**
 
@@ -3625,3 +3843,4 @@ each one, and this list is what changed while carrying out the plan, and why.
 - **The `Upload::save()` rename and `LivewireActionNamesTest`.** `wire:submit="upload"` resolved to Livewire's own `$wire` JS proxy instead of the server action and failed silently in the browser; the action is `save`, and a new test fails if any Livewire component declares an action sharing a name with the JS proxy's built-ins (`477dbe2`).
 - **The stalled-batch escape from the review screen.** `ImportBatch::isStalled()` and a Cancel button on the review screen recover a batch whose confirmation `dispatch()` never reached the queue at all (`74a4936`).
 - **The upload cleanup on a failed batch insert.** `PartImports::upload()` deletes the stored file when creating its `ImportBatch` row fails, matching the two refusal paths above it that already do (`198a9bc`).
+- **The task blocks.** The code and test blocks in Tasks 2 through 5 were reconciled against the files as built, so a reader who follows any block now gets the corrected code above instead of the defect it fixes.
