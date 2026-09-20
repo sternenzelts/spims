@@ -7,6 +7,7 @@ use App\Domain\Identity\KeyboardWedgeBadgeReader;
 use App\Domain\Settings\InstallSettings;
 use App\Models\AuditLog;
 use App\Models\Equipment;
+use App\Models\ImportBatch;
 use App\Models\Part;
 use App\Models\Personnel;
 use App\Models\Setting;
@@ -85,6 +86,7 @@ class AppServiceProvider extends ServiceProvider
             'part' => Part::class,
             'personnel' => Personnel::class,
             'stock_transaction' => StockTransaction::class,
+            'import_batch' => ImportBatch::class,
         ]);
     }
 }

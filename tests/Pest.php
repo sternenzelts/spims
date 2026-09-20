@@ -1,9 +1,11 @@
 <?php
 
+use App\Domain\Imports\PartImports;
 use App\Domain\Ledger\Exceptions\InsufficientStock;
 use App\Domain\Ledger\StockLedger;
 use App\Domain\Settings\InstallSettings;
 use App\Enums\Role;
+use App\Models\ImportBatch;
 use App\Models\Part;
 use App\Models\PartStock;
 use App\Models\StockTransaction;
@@ -12,6 +14,7 @@ use App\Support\Navigation;
 use Brick\Math\BigDecimal;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Process\Pool;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
@@ -196,4 +199,12 @@ function roleMatrix(string $holders): array
 function menuLabels(User $user): array
 {
     return collect(app(Navigation::class)->for($user))->flatten(1)->pluck('label')->values()->all();
+}
+
+/**
+ * A pending import of this CSV text, uploaded as parts.csv by the actor. Call Storage::fake() first.
+ */
+function uploadImport(string $csv, User $actor): ImportBatch
+{
+    return app(PartImports::class)->upload(UploadedFile::fake()->createWithContent('parts.csv', $csv), $actor);
 }
