@@ -3,20 +3,23 @@
 use App\Domain\Identity\PersonnelBadges;
 use App\Domain\Settings\InstallSettings;
 use App\Livewire\Admin\InstallSettingsForm;
+use App\Livewire\Imports\Review as ImportReview;
+use App\Livewire\Imports\Upload as ImportUpload;
 use App\Livewire\MasterData\Equipment\Form as EquipmentForm;
 use App\Livewire\MasterData\StorageLocations\Form as StorageLocationForm;
-use App\Livewire\Parts\Form as PartForm;
-use App\Livewire\Parts\StockLevelsForm;
 use App\Livewire\Personnel\Form as PersonnelForm;
 use App\Models\AuditLog;
-use App\Models\Equipment;
+use App\Models\ImportBatch;
 use App\Models\Part;
 use App\Models\Personnel;
-use App\Models\StorageLocation;
 use App\Models\User;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 
-it('provisions an install through the screens alone: design §3.6 steps 4, 5, 6 and 8', function () {
+it('provisions an install through the screens alone: design §3.6 steps 4 to 8', function () {
+    Storage::fake();
+
     // Step 4: the first System Administrator.
     $this->artisan('spims:create-admin', ['email' => 'it.admin@microtech.test', 'name' => 'IT Administrator'])
         ->expectsQuestion('Password', 'correct-horse-battery-staple')
@@ -42,22 +45,21 @@ it('provisions an install through the screens alone: design §3.6 steps 4, 5, 6 
         ->call('save')
         ->assertHasNoErrors();
 
-    // Spare parts one at a time, until the import in Plan 2b.
-    Livewire::actingAs($admin)->test(PartForm::class)
-        ->set('part_number', 'BRG-6204')
-        ->set('description', 'Deep groove ball bearing')
-        ->set('unit_of_measure', 'pcs')
-        ->set('default_location_id', (string) StorageLocation::query()->sole()->id)
-        ->set('equipment_ids', [(string) Equipment::query()->sole()->id])
-        ->call('save')
+    // Step 7: spare parts, their stock levels and their opening balances, from one file.
+    Livewire::actingAs($admin)->test(ImportUpload::class)
+        ->set('file', UploadedFile::fake()->createWithContent(
+            'parts.csv',
+            "Part number,Description,Unit of measure,Storage location code,Equipment codes,Criticality,Reorder point,Minimum level,Critical level,Opening quantity\n".
+            "BRG-6204,Deep groove ball bearing,pcs,A-01,CNC-01,critical,10,4,2,12\n",
+        ))
+        ->call('upload')
         ->assertHasNoErrors();
 
-    Livewire::actingAs($admin)->test(StockLevelsForm::class, ['part' => Part::query()->sole()])
-        ->set('reorder_point', '10')
-        ->set('min_level', '4')
-        ->set('critical_level', '2')
-        ->set('criticality', 'critical')
-        ->call('save')
+    // The sync queue in tests writes the import during the import call.
+    Livewire::actingAs($admin)->test(ImportReview::class, ['batch' => ImportBatch::query()->sole()])
+        ->call('check')
+        ->assertHasNoErrors()
+        ->call('import')
         ->assertHasNoErrors();
 
     // Step 8: personnel and badges.
@@ -74,11 +76,16 @@ it('provisions an install through the screens alone: design §3.6 steps 4, 5, 6 
 
     $checklist = collect(Livewire::actingAs($admin)->test(InstallSettingsForm::class)->instance()->checklist())
         ->pluck('done', 'label');
+    $part = Part::query()->with(['defaultLocation', 'equipment'])->sole();
 
     expect(app(InstallSettings::class)->isReadyForStockTransactions())->toBeTrue()
-        ->and($checklist->except('Opening balances')->every(fn (bool $done): bool => $done))->toBeTrue()
-        ->and($checklist['Opening balances'])->toBeFalse()
+        ->and($checklist->every(fn (bool $done): bool => $done))->toBeTrue()
+        ->and($part->description)->toBe('Deep groove ball bearing')
+        ->and($part->defaultLocation?->code)->toBe('A-01')
+        ->and($part->equipment->pluck('code')->all())->toBe(['CNC-01'])
+        ->and($part->min_level)->toBe('4.000')
+        ->and(onHand($part))->toBe('12.000')
         ->and(app(PersonnelBadges::class)->identify('A12345678')?->employee_no)->toBe('EMP-00042')
         ->and(AuditLog::query()->where('user_id', $admin->id)->distinct()->pluck('auditable_type')->sort()->values()->all())
-        ->toBe(['equipment', 'part', 'personnel', 'setting', 'storage_location']);
+        ->toBe(['equipment', 'import_batch', 'part', 'personnel', 'setting', 'stock_transaction', 'storage_location']);
 });

@@ -644,16 +644,24 @@ create table transaction_number_sequences (
 create table import_batches (
   id                  bigserial primary key,
   filename            text not null,
-  storage_path        text,
+  format              text not null check (format in ('csv','xlsx')),
+  storage_path        text not null,
   status              text not null default 'pending'
                         check (status in ('pending','validated','completed','failed','cancelled')),
+  headers             jsonb not null default '[]',  -- the file's header row
+  column_map          jsonb not null default '{}',  -- import column -> file column index
   rows_total          integer not null default 0,
   rows_created        integer not null default 0,
   rows_updated        integer not null default 0,
   rows_failed         integer not null default 0,
-  errors              jsonb not null default '[]',
+  opening_balances    integer not null default 0,
+  errors              jsonb not null default '[]',  -- [{row, message}]; row 0 is the whole file
+  warnings            jsonb not null default '[]',
+  preview             jsonb not null default '[]',  -- the first 100 rows that passed
   imported_by_user_id bigint not null references users(id),
   created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now(),
+  confirmed_at        timestamptz,                  -- set from confirmation until the job ends
   completed_at        timestamptz
 );
 ```
@@ -926,6 +934,15 @@ quantities, unknown locations, and level ordering.
 
 **Opening balances are written as `opening` movements, never as direct `on_hand` writes.** This is
 what makes the central invariant (§4.1) true from the very first row of imported data.
+
+Checking reads the file and writes nothing. Confirming queues one job, which checks the file again —
+parts and stock may have changed since the preview — and then writes every spare part through the
+part services and every opening balance through `StockLedger`, inside one database transaction. All
+of it is written or none of it is, and a failure leaves the batch Failed with its reason.
+
+Each spare part is created or updated through the same services the spare part screens use, so an
+imported change is audited exactly like one made by hand. Opening balances are posted in `opening`
+transactions of at most 200 lines.
 
 ---
 

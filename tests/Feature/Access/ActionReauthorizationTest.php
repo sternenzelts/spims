@@ -3,6 +3,8 @@
 use App\Enums\Role;
 use App\Livewire\Admin\InstallSettingsForm;
 use App\Livewire\Admin\WithdrawalPurposes;
+use App\Livewire\Imports\Review as ImportReview;
+use App\Livewire\Imports\Upload as ImportUpload;
 use App\Livewire\MasterData\Equipment\Form as EquipmentForm;
 use App\Livewire\MasterData\StorageLocations\Form as StorageLocationForm;
 use App\Livewire\Parts\Form as PartForm;
@@ -10,6 +12,7 @@ use App\Livewire\Parts\StockLevelsForm;
 use App\Livewire\Personnel\Form as PersonnelForm;
 use App\Livewire\Users\Form as UserForm;
 use App\Models\Equipment;
+use App\Models\ImportBatch;
 use App\Models\Part;
 use App\Models\Personnel;
 use App\Models\StorageLocation;
@@ -18,7 +21,7 @@ use App\Models\WithdrawalPurpose;
 use Livewire\Livewire;
 use Spatie\Permission\PermissionRegistrar;
 
-// Every data-changing action in Plan 2 authorizes again, on top of mount(). Only mount() is exercised
+// Every data-changing action in Plans 2 and 2b authorizes again, on top of mount(). Only mount() is exercised
 // by the screen access matrix, so deleting authorize() from any of these actions would fail nothing
 // without this test. Record parameters are built lazily inside each row's own closure, because a Pest
 // dataset is collected before RefreshDatabase and the Seed attribute have run for the test.
@@ -53,6 +56,18 @@ dataset('reauthorized actions', [
     ],
     'Personnel\Form::enrollBadge' => [
         Role::Supervisor, PersonnelForm::class, fn () => ['personnel' => Personnel::factory()->create()], 'enrollBadge', fn () => [],
+    ],
+    'Imports\Upload::upload' => [
+        Role::Supervisor, ImportUpload::class, fn () => [], 'upload', fn () => [],
+    ],
+    'Imports\Review::check' => [
+        Role::Supervisor, ImportReview::class, fn () => ['batch' => ImportBatch::factory()->create()], 'check', fn () => [],
+    ],
+    'Imports\Review::import' => [
+        Role::Supervisor, ImportReview::class, fn () => ['batch' => ImportBatch::factory()->create()], 'import', fn () => [],
+    ],
+    'Imports\Review::cancel' => [
+        Role::Supervisor, ImportReview::class, fn () => ['batch' => ImportBatch::factory()->create()], 'cancel', fn () => [],
     ],
 ]);
 

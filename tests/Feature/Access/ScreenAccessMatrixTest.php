@@ -2,12 +2,13 @@
 
 use App\Enums\Role;
 use App\Models\Equipment;
+use App\Models\ImportBatch;
 use App\Models\Part;
 use App\Models\Personnel;
 use App\Models\StorageLocation;
 use App\Models\User;
 
-// Every Plan 2 screen and the roles PRD §8 lets open it. Holders read as in RolePermissionMatrixTest:
+// Every Plan 2 and Plan 2b screen and the roles PRD §8 lets open it. Holders read as in RolePermissionMatrixTest:
 // C Custodian, S Supervisor, P Planner, A System Administrator. Route parameters are built lazily,
 // inside each test's database transaction.
 $screens = [
@@ -30,6 +31,10 @@ $screens = [
     'Personnel' => ['personnel.index', null, '-S-A'],
     'Register personnel' => ['personnel.create', null, '-S-A'],
     'Edit personnel' => ['personnel.edit', fn () => ['personnel' => Personnel::factory()->create()], '-S-A'],
+    'Spare part imports' => ['imports.index', null, '-S-A'],
+    'New spare part import' => ['imports.create', null, '-S-A'],
+    'Import template' => ['imports.template', null, '-S-A'],
+    'Spare part import' => ['imports.show', fn () => ['batch' => ImportBatch::factory()->create()], '-S-A'],
 ];
 
 dataset('screens', function () use ($screens) {
