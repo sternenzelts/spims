@@ -34,4 +34,17 @@ final class ImportRefused extends DomainException
     {
         return new self('This import has been imported, cancelled or started already, and can no longer be changed.', 'batch');
     }
+
+    /**
+     * @param  list<string>  $labels
+     */
+    public static function requiredColumnsMissing(array $labels): self
+    {
+        return new self('Match these required fields to a column of the file: '.implode(', ', $labels).'.', 'mapping');
+    }
+
+    public static function columnUsedTwice(string $header): self
+    {
+        return new self("Column \"{$header}\" is matched to more than one field.", 'mapping');
+    }
 }

@@ -19,7 +19,10 @@ use Throwable;
  */
 final readonly class PartImports
 {
-    public function __construct(private AuditLogger $audit) {}
+    public function __construct(
+        private AuditLogger $audit,
+        private ImportValidator $validator,
+    ) {}
 
     /**
      * Store an uploaded file as a new pending batch, with its header row and a first guess at which
@@ -67,6 +70,84 @@ final readonly class PartImports
 
         // Read back the database defaults (counts, errors, preview).
         return $batch->refresh();
+    }
+
+    /**
+     * Save which file column holds each import column, then check every row without writing
+     * anything (PRD FR-SPIMS-005 steps 3–5). The batch becomes Validated when every row passes and
+     * Failed when any row does; a Failed batch can be checked again with a corrected mapping.
+     *
+     * @param  array<string, int|null>  $columnMap  import column value => file column index, or null when not in the file
+     *
+     * @throws ImportRefused
+     */
+    public function check(ImportBatch $batch, array $columnMap, User $actor): ImportPreview
+    {
+        $map = $this->validMap($batch, $columnMap);
+
+        return DB::transaction(function () use ($batch, $map, $actor): ImportPreview {
+            $locked = $this->lockOpen($batch);
+            $locked->forceFill(['column_map' => $map])->save();
+
+            $preview = $this->validator->validate($locked, $actor);
+            $this->recordPreview($locked, $preview);
+
+            return $preview;
+        });
+    }
+
+    private function recordPreview(ImportBatch $batch, ImportPreview $preview): void
+    {
+        $batch->forceFill([
+            'status' => $preview->isValid() ? ImportStatus::Validated : ImportStatus::Failed,
+            'rows_total' => $preview->rowsTotal,
+            'rows_created' => $preview->creates(),
+            'rows_updated' => $preview->updates(),
+            'rows_failed' => $preview->failedRows(),
+            'opening_balances' => $preview->openingBalances(),
+            'errors' => $preview->errors,
+            'warnings' => $preview->warnings,
+            'preview' => $preview->sample(),
+        ])->save();
+    }
+
+    /**
+     * The mapping with unknown fields and out-of-range columns dropped, once every required field
+     * has a column and no column serves two fields.
+     *
+     * @param  array<string, int|null>  $columnMap
+     * @return array<string, int>
+     *
+     * @throws ImportRefused
+     */
+    private function validMap(ImportBatch $batch, array $columnMap): array
+    {
+        $map = [];
+
+        foreach (ImportColumn::cases() as $column) {
+            $index = $columnMap[$column->value] ?? null;
+
+            if ($index !== null && array_key_exists($index, $batch->headers)) {
+                $map[$column->value] = $index;
+            }
+        }
+
+        $missing = array_filter(
+            ImportColumn::cases(),
+            fn (ImportColumn $column): bool => $column->isRequired() && ! isset($map[$column->value]),
+        );
+
+        if ($missing !== []) {
+            throw ImportRefused::requiredColumnsMissing(array_values(array_map(fn (ImportColumn $column): string => $column->label(), $missing)));
+        }
+
+        foreach (array_count_values($map) as $index => $uses) {
+            if ($uses > 1) {
+                throw ImportRefused::columnUsedTwice($batch->headers[$index]);
+            }
+        }
+
+        return $map;
     }
 
     /**
