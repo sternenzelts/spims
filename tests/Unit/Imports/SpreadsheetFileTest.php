@@ -66,3 +66,17 @@ it('has no header row when every row is blank', function () {
 
     unlink($path);
 });
+
+it('renders numeric cells as plain decimal text, not scientific notation', function () {
+    $path = sys_get_temp_dir().'/'.uniqid('spims-test-', true).'.xlsx';
+    $writer = new Writer;
+    $writer->openToFile($path);
+    $writer->addRow(Row::fromValues(['Part number', 'Quantity']));
+    $writer->addRow(Row::fromValues([9999999999999, 0.0001]));
+    $writer->close();
+
+    expect(iterator_to_array(SpreadsheetFile::rows($path, 'xlsx')))->toBe([
+        1 => ['Part number', 'Quantity'],
+        2 => ['9999999999999', '0.0001'],
+    ]);
+});

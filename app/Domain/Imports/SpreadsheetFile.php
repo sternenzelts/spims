@@ -100,7 +100,8 @@ final class SpreadsheetFile
     {
         $text = match (true) {
             is_string($value) => $value,
-            is_int($value), is_float($value) => (string) $value,
+            is_int($value) => (string) $value,
+            is_float($value) => self::decimal($value),
             is_bool($value) => $value ? 'TRUE' : 'FALSE',
             $value instanceof DateTimeInterface => $value->format('Y-m-d'),
             is_array($value) => implode('', array_map(fn (mixed $run): string => $run instanceof TextRun ? $run->text : '', $value)),
@@ -108,5 +109,17 @@ final class SpreadsheetFile
         };
 
         return trim($text);
+    }
+
+    /**
+     * A float cell as plain decimal text. PHP's own float-to-string cast uses precision=14 and can
+     * fall back to scientific notation, which would rewrite a long numeric part number and round a
+     * quantity that was typed exactly.
+     */
+    private static function decimal(float $value): string
+    {
+        $text = rtrim(rtrim(sprintf('%.10F', $value), '0'), '.');
+
+        return $text === '' ? '0' : $text;
     }
 }
