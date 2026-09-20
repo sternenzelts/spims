@@ -19,13 +19,20 @@
 
     <flux:error name="batch" />
 
-    @if ($batch->isImporting())
+    @if ($batch->isImporting() && ! $batch->isStalled())
         <div wire:poll.2s>
             <flux:callout icon="arrow-path">
                 <flux:callout.heading>{{ __('The import is running.') }}</flux:callout.heading>
                 <flux:callout.text>{{ __('This page updates when it finishes. You can leave it and come back.') }}</flux:callout.text>
             </flux:callout>
         </div>
+    @elseif ($batch->isStalled())
+        <flux:callout variant="warning" icon="exclamation-triangle">
+            <flux:callout.heading>{{ __('The import has not reported back.') }}</flux:callout.heading>
+            <flux:callout.text>{{ __('Nothing has been written. The queue worker may not be running.') }}</flux:callout.text>
+        </flux:callout>
+
+        <flux:button wire:click="cancel" wire:confirm="{{ __('Cancel this import? Nothing will be saved.') }}">{{ __('Cancel import') }}</flux:button>
     @elseif ($batch->status === \App\Enums\ImportStatus::Completed)
         <flux:callout variant="success" icon="check-circle">
             <flux:callout.heading>{{ __('Imported') }}</flux:callout.heading>

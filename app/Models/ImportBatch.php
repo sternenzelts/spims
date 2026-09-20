@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ImportStatus;
+use App\Jobs\ConfirmImport;
 use Carbon\CarbonImmutable;
 use Database\Factories\ImportBatchFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -70,6 +71,17 @@ class ImportBatch extends Model
     public function isImporting(): bool
     {
         return $this->status === ImportStatus::Validated && $this->confirmed_at !== null;
+    }
+
+    /**
+     * Importing, but past the job's own timeout: the job never reported back, so it cannot still
+     * be running.
+     */
+    public function isStalled(): bool
+    {
+        return $this->isImporting()
+            && $this->confirmed_at !== null
+            && $this->confirmed_at->addSeconds(ConfirmImport::TIMEOUT)->isPast();
     }
 
     /**

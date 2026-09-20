@@ -306,12 +306,9 @@ final readonly class PartImports
         $locked = ImportBatch::query()->whereKey($batch->id)->lockForUpdate()->firstOrFail();
 
         // A job that dies before reaching confirm()'s own catch, or whose dispatch() never reached
-        // the queue at all, otherwise leaves confirmed_at set forever: past the job's own timeout it
-        // cannot still be running, so let a person check, import or cancel the batch again.
-        $stuck = $locked->confirmed_at !== null
-            && $locked->confirmed_at->addSeconds(ConfirmImport::TIMEOUT)->isPast();
-
-        if (! $locked->status->isOpen() || ($locked->confirmed_at !== null && ! $stuck)) {
+        // the queue at all, otherwise leaves confirmed_at set forever: once the batch is stalled,
+        // let a person check, import or cancel it again.
+        if (! $locked->status->isOpen() || ($locked->confirmed_at !== null && ! $locked->isStalled())) {
             throw ImportRefused::notOpen();
         }
 

@@ -2,6 +2,7 @@
 
 use App\Enums\ImportStatus;
 use App\Enums\Role;
+use App\Jobs\ConfirmImport;
 use App\Livewire\Imports\Index;
 use App\Livewire\Imports\Review;
 use App\Livewire\Imports\Upload;
@@ -112,7 +113,28 @@ it('shows a running import and refreshes until it ends', function () {
         ->call('check')
         ->call('import')
         ->assertSee('The import is running.')
-        ->assertSeeHtml('wire:poll.2s');
+        ->assertSeeHtml('wire:poll.2s')
+        ->assertDontSeeHtml('wire:click="cancel"');
+});
+
+it('lets a stalled import be cancelled from the screen', function () {
+    Queue::fake();
+    $admin = userWithRoles(Role::Admin);
+    $batch = uploadImport("Part number,Description,Unit of measure\nP-1,One,pcs\n", $admin);
+
+    Livewire::actingAs($admin)->test(Review::class, ['batch' => $batch])
+        ->call('check')
+        ->call('import');
+
+    $this->travel(ConfirmImport::TIMEOUT + 1)->seconds();
+
+    Livewire::actingAs($admin)->test(Review::class, ['batch' => $batch])
+        ->assertSee('has not reported back')
+        ->assertSeeHtml('wire:click="cancel"')
+        ->assertDontSeeHtml('wire:poll.2s')
+        ->call('cancel');
+
+    expect($batch->refresh()->status)->toBe(ImportStatus::Cancelled);
 });
 
 it('cancels an import at the preview, writing nothing', function () {
