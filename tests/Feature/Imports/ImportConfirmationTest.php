@@ -163,22 +163,24 @@ it('queues the import and marks the batch as started', function () {
 
 it('locks opening balances in ascending part id order to avoid deadlock', function () {
     app()->when(ImportWriter::class)->needs('$linesPerTransaction')->give(2);
-    // Create parts in an order where part ids are not ascending: first create part for P-50, then P-5.
-    $part50 = Part::factory()->create(['part_number' => 'P-50']);
-    $part5 = Part::factory()->create(['part_number' => 'P-5']);
-    $batch = ($this->checked)("Part number,Description,Unit of measure,Opening quantity\nP-50,Part fifty,pcs,50\nP-5,Part five,pcs,5\n");
+
+    // Create the parts so their ids run opposite to the file's rows: the last row holds the lowest id.
+    $third = Part::factory()->create(['part_number' => 'P-3']);
+    $second = Part::factory()->create(['part_number' => 'P-2']);
+    $first = Part::factory()->create(['part_number' => 'P-1']);
+    $batch = ($this->checked)("Part number,Description,Unit of measure,Opening quantity\nP-1,One,pcs,1\nP-2,Two,pcs,2\nP-3,Three,pcs,3\n");
 
     app(PartImports::class)->requestConfirmation($batch, $this->admin);
 
-    // Read movements in posting order: they must be sorted by part id across all transactions,
-    // even though the file rows are not.
-    $movements = StockMovement::query()
+    $posted = StockMovement::query()
         ->where('movement_type', 'opening')
         ->orderBy('stock_transaction_id')
         ->orderBy('id')
         ->pluck('part_id')
+        ->map(fn (mixed $partId): int => (int) $partId)
         ->all();
 
-    // Verify ascending order: the lower part id must come first.
-    expect($movements[0])->toBeLessThan($movements[1]);
+    // Ascending by part id across both transactions, not merely inside each one.
+    expect($posted)->toBe([$third->id, $second->id, $first->id])
+        ->and(StockTransaction::query()->where('type', 'opening')->count())->toBe(2);
 });
