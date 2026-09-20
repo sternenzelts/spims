@@ -49,7 +49,12 @@ final class ImportFile
             // first. Windows refuses to delete a file that is still open.
             gc_collect_cycles();
 
-            unlink($path);
+            // As in rows(): a failed unlink must not raise, or it would replace the header row this
+            // finally is returning with an ErrorException, reporting a perfectly readable file as
+            // unreadable.
+            if (is_file($path)) {
+                @unlink($path);
+            }
         }
     }
 

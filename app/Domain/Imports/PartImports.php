@@ -6,10 +6,13 @@ use App\Domain\Audit\AuditLogger;
 use App\Domain\Imports\Exceptions\ImportRefused;
 use App\Domain\Ledger\Exceptions\StockBusy;
 use App\Enums\ImportStatus;
+use App\Enums\Permission;
 use App\Jobs\ConfirmImport;
 use App\Models\ImportBatch;
 use App\Models\User;
 use DomainException;
+use Illuminate\Database\DeadlockException;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -23,6 +26,9 @@ use Throwable;
  */
 final readonly class PartImports
 {
+    /** The most errors kept on a batch: Imports\Index hydrates every batch's errors for its page. */
+    private const int MAX_ERRORS = 500;
+
     public function __construct(
         private AuditLogger $audit,
         private ImportValidator $validator,
@@ -138,6 +144,16 @@ final readonly class PartImports
                     return;
                 }
 
+                // The column permissions are re-checked below through the validator, but not this
+                // one: an actor whose import permission was revoked after clicking Import must not
+                // have it written anyway.
+                if (! $actor->can(Permission::PartsImport)) {
+                    $this->recordPreview($locked, new ImportPreview([], 0, [['row' => 0, 'message' => 'You no longer have permission to import spare parts, so nothing was saved.']], []));
+                    $locked->forceFill(['confirmed_at' => null])->save();
+
+                    return;
+                }
+
                 $preview = $this->validator->validate($locked, $actor);
 
                 if (! $preview->isValid()) {
@@ -175,14 +191,23 @@ final readonly class PartImports
 
     private function recordPreview(ImportBatch $batch, ImportPreview $preview): void
     {
+        $errors = $preview->errors;
+
+        if (count($errors) > self::MAX_ERRORS) {
+            $left = count($errors) - self::MAX_ERRORS;
+            $errors = array_slice($errors, 0, self::MAX_ERRORS);
+            $errors[] = ['row' => 0, 'message' => "{$left} more errors are not shown. Fix these, then check the file again to see the rest."];
+        }
+
         $batch->forceFill([
             'status' => $preview->isValid() ? ImportStatus::Validated : ImportStatus::Failed,
             'rows_total' => $preview->rowsTotal,
             'rows_created' => $preview->creates(),
             'rows_updated' => $preview->updates(),
+            // The true count of failed rows, from the full list: the truncation above is display-only.
             'rows_failed' => $preview->failedRows(),
             'opening_balances' => $preview->openingBalances(),
-            'errors' => $preview->errors,
+            'errors' => $errors,
             'warnings' => $preview->warnings,
             'preview' => $preview->sample(),
         ])->save();
@@ -201,6 +226,11 @@ final readonly class PartImports
             // PartRecords checks part numbers before saving, so only a part saved at the same
             // moment by a screen or another import reaches the unique index (Plan 2 carried note).
             $exception instanceof UniqueConstraintViolationException => 'a spare part in the file was created elsewhere at the same moment. Check the file again, and that row will update it instead.',
+            // Postgres SQLSTATE 40P01. A deadlock inside a transaction nested under this one (any
+            // part write, any opening posting) surfaces as DeadlockException, whose own getCode() is
+            // not the SQLSTATE (Laravel resets it); one at this transaction's own level surfaces as
+            // the underlying QueryException, whose getCode() still is.
+            $exception instanceof DeadlockException, $exception instanceof QueryException && $exception->getCode() === '40P01' => 'another import was writing the same spare parts at the same moment. Check the file again.',
             default => 'an unexpected error, recorded in the application log.',
         };
 

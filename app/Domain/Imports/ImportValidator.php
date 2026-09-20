@@ -28,6 +28,9 @@ final readonly class ImportValidator
 
     private const string QUANTITY_MESSAGE = 'must be a number of zero or more, with at most three decimal places.';
 
+    /** The most data rows one import may hold below its header. */
+    private const int MAX_ROWS = 10_000;
+
     public function __construct(
         private StockLevels $stockLevels,
         private InstallSettings $settings,
@@ -35,7 +38,18 @@ final readonly class ImportValidator
 
     public function validate(ImportBatch $batch, User $actor): ImportPreview
     {
-        $rows = iterator_to_array(ImportFile::rows($batch->storage_path, $batch->format));
+        $rows = [];
+
+        foreach (ImportFile::rows($batch->storage_path, $batch->format) as $rowNumber => $cells) {
+            $rows[$rowNumber] = $cells;
+
+            // The header row plus MAX_ROWS data rows: stop reading rather than hold a much larger
+            // file whole, so an oversized upload becomes this message instead of a blank 500.
+            if (count($rows) > self::MAX_ROWS + 1) {
+                return new ImportPreview([], 0, [['row' => 0, 'message' => 'The file has more than '.number_format(self::MAX_ROWS).' rows below its header. Split it into smaller files and import each one.']], []);
+            }
+        }
+
         unset($rows[array_key_first($rows)]);
 
         if ($rows === []) {
@@ -205,7 +219,7 @@ final readonly class ImportValidator
             if ($filled) {
                 $who = $permission === Permission::OpeningBalancesImport
                     ? 'only a System Administrator may import opening quantities.'
-                    : 'only planners and System Administrators may import stock levels.';
+                    : 'only a System Administrator may import stock levels.';
 
                 $errors[] = ['row' => 0, 'message' => "Column \"{$column->label()}\": {$who}"];
             }

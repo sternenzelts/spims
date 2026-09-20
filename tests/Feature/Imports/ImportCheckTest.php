@@ -148,7 +148,7 @@ it('refuses columns the importer may not change, unless they are blank', functio
 
     expect($blank->refresh()->status)->toBe(ImportStatus::Validated)
         ->and(($this->messages)($filled))->toBe([
-            '0: Column "Minimum level": only planners and System Administrators may import stock levels.',
+            '0: Column "Minimum level": only a System Administrator may import stock levels.',
             '0: Column "Opening quantity": only a System Administrator may import opening quantities.',
         ]);
 });
@@ -168,6 +168,29 @@ it('refuses a file with a header row only', function () {
     ($this->check)($batch);
 
     expect(($this->messages)($batch))->toBe(['0: The file has no rows below its header.']);
+});
+
+it('refuses a file with more rows than the configured maximum, writing nothing', function () {
+    $csv = "Part number,Description,Unit of measure\n".str_repeat("P,Part,pcs\n", 10_001);
+    $batch = uploadImport($csv, $this->admin);
+
+    ($this->check)($batch);
+
+    expect(($this->messages)($batch))->toBe(['0: The file has more than 10,000 rows below its header. Split it into smaller files and import each one.'])
+        ->and(Part::query()->count())->toBe(0);
+});
+
+it('keeps at most 500 errors, with a final row saying how many more there are', function () {
+    $csv = "Part number,Description,Unit of measure\n".str_repeat(",Missing part number,pcs\n", 600);
+    $batch = uploadImport($csv, $this->admin);
+
+    ($this->check)($batch);
+    $batch->refresh();
+
+    expect($batch->status)->toBe(ImportStatus::Failed)
+        ->and($batch->rows_failed)->toBe(600)
+        ->and($batch->errors)->toHaveCount(501)
+        ->and($batch->errors[500])->toBe(['row' => 0, 'message' => '100 more errors are not shown. Fix these, then check the file again to see the rest.']);
 });
 
 it('refuses a mapping that leaves out a required column or gives one column two fields', function () {

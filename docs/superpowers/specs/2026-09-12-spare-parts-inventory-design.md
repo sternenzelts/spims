@@ -664,6 +664,8 @@ create table import_batches (
   confirmed_at        timestamptz,                  -- set from confirmation until the job ends
   completed_at        timestamptz
 );
+
+create index import_batches_created_idx on import_batches (created_at desc);
 ```
 
 ### 4.4 Stock level semantics — resolving an ambiguity in the proposal

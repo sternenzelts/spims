@@ -16,9 +16,11 @@ use App\Models\Part;
 use App\Models\StockMovement;
 use App\Models\StockTransaction;
 use App\Models\StorageLocation;
+use Illuminate\Database\DeadlockException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Spatie\Permission\PermissionRegistrar;
 
 beforeEach(function () {
     Storage::fake();
@@ -131,6 +133,21 @@ it('writes nothing when the import fails part-way, and records why', function (C
     ],
 ]);
 
+it('records a deadlock against another import as its own reason', function () {
+    // Thrown from within Part::created() as this test's dataset above does, a manufactured
+    // DeadlockException confuses Laravel's own nested-transaction concurrency handling (it assumes
+    // the database has already aborted the whole transaction, which a manufactured exception has
+    // not done), so markFailed() is exercised directly instead of through confirm()'s transaction.
+    $batch = ($this->checked)("Part number,Description,Unit of measure\nP-1,One,pcs\n");
+
+    app(PartImports::class)->markFailed($batch, new DeadlockException('deadlock detected while inserting into "parts" …', 0, new Exception('deadlock detected')));
+
+    expect($batch->refresh())
+        ->status->toBe(ImportStatus::Failed)
+        ->confirmed_at->toBeNull()
+        ->errors->toBe([['row' => 0, 'message' => 'The import stopped and nothing was saved: another import was writing the same spare parts at the same moment. Check the file again.']]);
+});
+
 it('imports a batch only after it passed its check, and only once', function () {
     $imports = app(PartImports::class);
     $batch = uploadImport("Part number,Description,Unit of measure\nP-1,One,pcs\n", $this->admin);
@@ -203,6 +220,23 @@ it('marks a batch Failed when the confirm job never finishes, and it can be chec
 
     expect($preview->isValid())->toBeTrue()
         ->and($batch->refresh()->status)->toBe(ImportStatus::Validated);
+});
+
+it('refuses to write when the actor no longer has permission to import, and records why', function () {
+    Queue::fake();
+    $batch = ($this->checked)("Part number,Description,Unit of measure\nP-1,One,pcs\n");
+    app(PartImports::class)->requestConfirmation($batch, $this->admin);
+
+    $this->admin->syncRoles([]);
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+    app(PartImports::class)->confirm($batch, $this->admin);
+
+    expect($batch->refresh())
+        ->status->toBe(ImportStatus::Failed)
+        ->confirmed_at->toBeNull()
+        ->errors->toBe([['row' => 0, 'message' => 'You no longer have permission to import spare parts, so nothing was saved.']])
+        ->and(Part::query()->exists())->toBeFalse();
 });
 
 it('lets a batch whose confirmation is older than the job timeout be cancelled, but not one confirmed a moment ago', function () {
