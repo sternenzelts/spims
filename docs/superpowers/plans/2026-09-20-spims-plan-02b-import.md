@@ -1236,10 +1236,7 @@ final readonly class PartImports
     {
         $locked = ImportBatch::query()->whereKey($batch->id)->lockForUpdate()->firstOrFail();
 
-        // A job that dies before reaching confirm()'s own catch, or whose dispatch() never reached
-        // the queue at all, otherwise leaves confirmed_at set forever: once the batch is stalled,
-        // let a person check, import or cancel it again.
-        if (! $locked->status->isOpen() || ($locked->confirmed_at !== null && ! $locked->isStalled())) {
+        if (! $locked->status->isOpen() || $locked->confirmed_at !== null) {
             throw ImportRefused::notOpen();
         }
 
@@ -2709,6 +2706,24 @@ In `app/Domain/Imports/PartImports.php`:
             'confirmed_at' => null,
             'errors' => [['row' => 0, 'message' => "The import stopped and nothing was saved: {$reason}"]],
         ])->save();
+    }
+```
+
+5. Update `lockOpen()` to let a stalled batch through. It can only happen here: the timeout it compares against, `ConfirmImport::TIMEOUT`, belongs to the job this task creates.
+
+```php
+    private function lockOpen(ImportBatch $batch): ImportBatch
+    {
+        $locked = ImportBatch::query()->whereKey($batch->id)->lockForUpdate()->firstOrFail();
+
+        // A job that dies before reaching confirm()'s own catch, or whose dispatch() never reached
+        // the queue at all, otherwise leaves confirmed_at set forever: once the batch is stalled,
+        // let a person check, import or cancel it again.
+        if (! $locked->status->isOpen() || ($locked->confirmed_at !== null && ! $locked->isStalled())) {
+            throw ImportRefused::notOpen();
+        }
+
+        return $locked;
     }
 ```
 
