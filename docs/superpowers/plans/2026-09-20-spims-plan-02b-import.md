@@ -303,6 +303,20 @@ it('has no header row when every row is blank', function () {
 
     unlink($path);
 });
+
+it('renders numeric cells as plain decimal text, not scientific notation', function () {
+    $path = sys_get_temp_dir().'/'.uniqid('spims-test-', true).'.xlsx';
+    $writer = new Writer;
+    $writer->openToFile($path);
+    $writer->addRow(Row::fromValues(['Part number', 'Quantity']));
+    $writer->addRow(Row::fromValues([9999999999999, 0.0001]));
+    $writer->close();
+
+    expect(iterator_to_array(SpreadsheetFile::rows($path, 'xlsx')))->toBe([
+        1 => ['Part number', 'Quantity'],
+        2 => ['9999999999999', '0.0001'],
+    ]);
+});
 ```
 
 - [ ] **Step 3: Run the tests to verify they fail**
@@ -548,7 +562,8 @@ final class SpreadsheetFile
     {
         $text = match (true) {
             is_string($value) => $value,
-            is_int($value), is_float($value) => (string) $value,
+            is_int($value) => (string) $value,
+            is_float($value) => self::decimal($value),
             is_bool($value) => $value ? 'TRUE' : 'FALSE',
             $value instanceof DateTimeInterface => $value->format('Y-m-d'),
             is_array($value) => implode('', array_map(fn (mixed $run): string => $run instanceof TextRun ? $run->text : '', $value)),
@@ -556,6 +571,18 @@ final class SpreadsheetFile
         };
 
         return trim($text);
+    }
+
+    /**
+     * A float cell as plain decimal text. PHP's own float-to-string cast uses precision=14 and can
+     * fall back to scientific notation, which would rewrite a long numeric part number and round a
+     * quantity that was typed exactly.
+     */
+    private static function decimal(float $value): string
+    {
+        $text = rtrim(rtrim(sprintf('%.10F', $value), '0'), '.');
+
+        return $text === '' ? '0' : $text;
     }
 }
 ```
@@ -591,7 +618,7 @@ final class ImportTemplate
 php artisan test tests/Unit/Imports
 ```
 
-Expected: PASS, 11 tests.
+Expected: PASS, 12 tests.
 
 - [ ] **Step 7: Run the full check and commit**
 
@@ -1388,8 +1415,8 @@ it('refuses columns the importer may not change, unless they are blank', functio
 
     expect($blank->refresh()->status)->toBe(ImportStatus::Validated)
         ->and(($this->messages)($filled))->toBe([
-            '0: Column “Minimum level”: only planners and System Administrators may import stock levels.',
-            '0: Column “Opening quantity”: only a System Administrator may import opening quantities.',
+            '0: Column "Minimum level": only a System Administrator may import stock levels.',
+            '0: Column "Opening quantity": only a System Administrator may import opening quantities.',
         ]);
 });
 
@@ -1417,7 +1444,7 @@ it('refuses a mapping that leaves out a required column or gives one column two 
     expect(fn () => $imports->check($batch, ['description' => 1, 'unit_of_measure' => 2], $this->admin))
         ->toThrow(ImportRefused::class, 'Match these required fields to a column of the file: Part number.')
         ->and(fn () => $imports->check($batch, ['part_number' => 0, 'description' => 0, 'unit_of_measure' => 2], $this->admin))
-        ->toThrow(ImportRefused::class, 'Column “Item” is matched to more than one field.');
+        ->toThrow(ImportRefused::class, 'Column "Item" is matched to more than one field.');
 
     $imports->check($batch, ['part_number' => 0, 'description' => 1, 'unit_of_measure' => 2], $this->admin);
 
@@ -1758,9 +1785,9 @@ final readonly class ImportValidator
             if ($filled) {
                 $who = $permission === Permission::OpeningBalancesImport
                     ? 'only a System Administrator may import opening quantities.'
-                    : 'only planners and System Administrators may import stock levels.';
+                    : 'only a System Administrator may import stock levels.';
 
-                $errors[] = ['row' => 0, 'message' => "Column “{$column->label()}”: {$who}"];
+                $errors[] = ['row' => 0, 'message' => "Column \"{$column->label()}\": {$who}"];
             }
 
             unset($map[$column->value]);
@@ -1868,7 +1895,7 @@ Add these refusals to `app/Domain/Imports/Exceptions/ImportRefused.php`:
 
     public static function columnUsedTwice(string $header): self
     {
-        return new self("Column “{$header}” is matched to more than one field.", 'mapping');
+        return new self("Column \"{$header}\" is matched to more than one field.", 'mapping');
     }
 ```
 
@@ -2172,6 +2199,30 @@ it('queues the import and marks the batch as started', function () {
         ->confirmed_at->not->toBeNull()
         ->and(Part::query()->exists())->toBeFalse();
 });
+
+it('locks opening balances in ascending part id order to avoid deadlock', function () {
+    app()->when(ImportWriter::class)->needs('$linesPerTransaction')->give(2);
+
+    // Create the parts so their ids run opposite to the file's rows: the last row holds the lowest id.
+    $third = Part::factory()->create(['part_number' => 'P-3']);
+    $second = Part::factory()->create(['part_number' => 'P-2']);
+    $first = Part::factory()->create(['part_number' => 'P-1']);
+    $batch = ($this->checked)("Part number,Description,Unit of measure,Opening quantity\nP-1,One,pcs,1\nP-2,Two,pcs,2\nP-3,Three,pcs,3\n");
+
+    app(PartImports::class)->requestConfirmation($batch, $this->admin);
+
+    $posted = StockMovement::query()
+        ->where('movement_type', 'opening')
+        ->orderBy('stock_transaction_id')
+        ->orderBy('id')
+        ->pluck('part_id')
+        ->map(fn (mixed $partId): int => (int) $partId)
+        ->all();
+
+    // Ascending by part id across both transactions, not merely inside each one.
+    expect($posted)->toBe([$third->id, $second->id, $first->id])
+        ->and(StockTransaction::query()->where('type', 'opening')->count())->toBe(2);
+});
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2237,6 +2288,10 @@ final readonly class ImportWriter
                 $openingBalances[] = [$part->id, $row->openingQuantity];
             }
         }
+
+        // Ascending part id across every chunk, so an import takes its stock locks in the same
+        // order as every other posting and cannot deadlock against a station (design §5.2).
+        usort($openingBalances, fn (array $first, array $second): int => $first[0] <=> $second[0]);
 
         foreach (array_chunk($openingBalances, $this->linesPerTransaction) as $lines) {
             $this->postOpeningBalances($lines, $actor);
@@ -2474,7 +2529,7 @@ In `app/Domain/Imports/PartImports.php`:
 php artisan test tests/Feature/Imports
 ```
 
-Expected: PASS. `ImportConfirmationTest` contributes 8 tests: 6 cases, one of them run three times by its dataset.
+Expected: PASS. `ImportConfirmationTest` contributes 9 tests: 7 cases, one of them run three times by its dataset.
 
 - [ ] **Step 6: Run the full check and commit**
 
@@ -2508,7 +2563,7 @@ git commit -m "Import checked spare parts and opening balances in one all-or-not
     - `imports.template` (`/imports/template`)
     - `imports.show` (`/imports/{batch}`)
   - Components:
-    - `Imports\Upload`, with property `file` and action `upload`.
+    - `Imports\Upload`, with property `file` and action `save`.
     - `Imports\Review`, with properties `batchId` and `columnMap` and actions `check`, `import` and `cancel`.
   - The menu item "Spare part imports" in the Master data group.
   - `ImportStatus::color(): string`.
@@ -2574,7 +2629,7 @@ it('uploads a file, matches its columns, checks it and imports it', function () 
 
     $upload = Livewire::actingAs($admin)->test(Upload::class)
         ->set('file', UploadedFile::fake()->createWithContent('parts.csv', "Item code,Item description,UOM,Qty\nBRG-6204,Deep groove ball bearing,pcs,12\n"))
-        ->call('upload')
+        ->call('save')
         ->assertHasNoErrors();
 
     $batch = ImportBatch::query()->sole();
@@ -2599,7 +2654,7 @@ it('uploads a file, matches its columns, checks it and imports it', function () 
 it('refuses a file that is not an xlsx or csv file', function () {
     Livewire::actingAs(userWithRoles(Role::Supervisor))->test(Upload::class)
         ->set('file', UploadedFile::fake()->createWithContent('parts.ods', 'content'))
-        ->call('upload')
+        ->call('save')
         ->assertHasErrors('file')
         ->assertSee('Upload an .xlsx or .csv file.');
 
@@ -2830,6 +2885,10 @@ Create `resources/views/livewire/imports.blade.php`:
 
 - [ ] **Step 5: Create the upload screen**
 
+The action that stores the file is named `save`, not `upload`: Livewire's own `$wire` JS proxy
+already defines a bare `upload` property as the file-upload entry point, so `wire:submit="upload"`
+would resolve to that instead of the server action and fail silently in the browser.
+
 Create `app/Livewire/Imports/Upload.php`:
 
 ```php
@@ -2859,7 +2918,7 @@ class Upload extends Component
         $this->authorize(Permission::PartsImport);
     }
 
-    public function upload(PartImports $imports): void
+    public function save(PartImports $imports): void
     {
         $this->authorize(Permission::PartsImport);
 
@@ -2894,7 +2953,7 @@ Create `resources/views/livewire/imports/upload.blade.php`:
         {{ __('Upload an .xlsx or .csv file with a header row naming its columns and one spare part per row. Nothing is saved until you check the file and confirm the import.') }}
     </flux:text>
 
-    <form wire:submit="upload" class="space-y-6">
+    <form wire:submit="save" class="space-y-6">
         <flux:input type="file" wire:model="file" :label="__('File')" accept=".xlsx,.csv" />
 
         <div class="flex flex-wrap gap-4">
@@ -3251,8 +3310,8 @@ In `tests/Feature/Access/ActionReauthorizationTest.php`:
 3. Add these rows to the end of the `reauthorized actions` dataset:
 
 ```php
-    'Imports\Upload::upload' => [
-        Role::Supervisor, ImportUpload::class, fn () => [], 'upload', fn () => [],
+    'Imports\Upload::save' => [
+        Role::Supervisor, ImportUpload::class, fn () => [], 'save', fn () => [],
     ],
     'Imports\Review::check' => [
         Role::Supervisor, ImportReview::class, fn () => ['batch' => ImportBatch::factory()->create()], 'check', fn () => [],
@@ -3324,7 +3383,7 @@ it('provisions an install through the screens alone: design §3.6 steps 4 to 8',
             "Part number,Description,Unit of measure,Storage location code,Equipment codes,Criticality,Reorder point,Minimum level,Critical level,Opening quantity\n".
             "BRG-6204,Deep groove ball bearing,pcs,A-01,CNC-01,critical,10,4,2,12\n",
         ))
-        ->call('upload')
+        ->call('save')
         ->assertHasNoErrors();
 
     // The sync queue in tests writes the import during the import call.
@@ -3519,7 +3578,7 @@ git commit -m "Refuse two withdrawal purposes whose names differ only in letter 
 ## Plan 2b Is Done When
 
 - [ ] All seven tasks are committed, one commit each, with `composer test` green at every commit.
-- [ ] The suite has grown by 79 tests, from 456 to 535: Task 1 eleven, Task 2 nine, Task 3 ten, Task 4 eight, Task 5 twelve, Task 6 twenty-eight, Task 7 one. A different number is fine when the task reports say why.
+- [ ] The suite has grown by 81 tests, from 456 to 537: Task 1 twelve, Task 2 nine, Task 3 ten, Task 4 nine, Task 5 twelve, Task 6 twenty-eight, Task 7 one. A different number is fine when the task reports say why.
 - [ ] `php artisan migrate:fresh --seed` runs clean on a scratch database, with both new migrations.
 - [ ] The ledger invariant test still passes, and `LedgerVerifier::verify()` returns `[]` after an import with opening balances.
 - [ ] Walked in a browser on a scratch demo install, signed in as a System Administrator:
@@ -3546,3 +3605,23 @@ Carry these to the plan named, in the ledger at `.superpowers/sdd/2026-09-20-spi
   - `StockLedger` sets `lock_timeout` with `set local`, so from the first opening posting it applies to the rest of the import transaction as well. That is the intended behaviour, but it belongs in the operations notes.
 - **Microtech (Q18).** When the starting parts list arrives, compare its header row with `ImportColumn::aliases()` and add whatever spelling it uses. Every column can be matched by hand on the screen, so a missing alias is a convenience, not a blocker.
 - **Open question for Microtech.** An import never sets a part's status. A part someone set to Inactive stays Inactive even when a later file holds it. Confirm that is what they expect before go-live.
+
+## What Changed During Execution
+
+This plan is the record of what was built, corrections included: the sections above already carry
+each one, and this list is what changed while carrying out the plan, and why.
+
+- **Float rendering.** `SpreadsheetFile::text()` renders a float cell through a `decimal()` helper instead of PHP's own float-to-string cast, which uses precision=14 and can fall back to scientific notation, rewriting a long part number or rounding a quantity typed exactly (`f2cdb06`).
+- **Opening-balance sort.** `ImportWriter::write()` sorts opening balances by ascending part id before chunking, so an import takes its stock locks in the same order as every other posting and cannot deadlock against a station (`a59db16`, with the test strengthened to actually prove the sort in `c89d012`).
+- **Straight quotes.** `ImportValidator` and `ImportRefused` quote a column name with escaped straight quotes, not the typographic quotes this plan used to show them (`b30d57b`).
+- **The stuck-batch `failed()` hook and `ConfirmImport::TIMEOUT`.** A job that dies before reaching `confirm()`'s own catch — an out-of-memory kill, a worker restart, the timeout, or a `dispatch()` that never reaches the queue at all — left a batch `Validated` with `confirmed_at` set forever. `ConfirmImport::failed()` now marks it `Failed`, and `PartImports::lockOpen()` lets a batch through once its confirmation is older than the job's own timeout (`f0ea652`).
+- **The maximum row count.** `ImportValidator::MAX_ROWS` stops a file too large to hold in memory with a row-0 error, instead of failing partway through with a blank 500 (`7bac9bd`).
+- **The error-list cap.** `PartImports::recordPreview()` keeps at most 500 errors on the batch, since `Imports\Index` hydrates every batch's errors for its page (`7bac9bd`).
+- **The re-check of `PartsImport` in `confirm()`.** Revoking the permission between a click on Import and the worker picking up the job now refuses and records the write, rather than throwing past the batch (`7bac9bd`).
+- **The deadlock arm in `markFailed()`.** Two imports writing the same parts can deadlock (Postgres SQLSTATE 40P01); the loser now gets a reason naming that, instead of "an unexpected error, recorded in the application log." (`7bac9bd`).
+- **The guarded `unlink` in `headerRow()`.** Matches the `is_file()`-guarded `@unlink()` already used in `rows()`, so a failed `unlink()` cannot turn a perfectly readable file into a reported-unreadable one (`7bac9bd`).
+- **The reworded stock-levels message.** "only a System Administrator may import stock levels", not "planners and System Administrators": a Planner does not hold `Permission::PartsImport` and cannot import at all (`7bac9bd`).
+- **The design document's index line.** The `import_batches` block now lists `import_batches_created_idx` below its create table block, like its sibling tables (`7bac9bd`).
+- **The `Upload::save()` rename and `LivewireActionNamesTest`.** `wire:submit="upload"` resolved to Livewire's own `$wire` JS proxy instead of the server action and failed silently in the browser; the action is `save`, and a new test fails if any Livewire component declares an action sharing a name with the JS proxy's built-ins (`477dbe2`).
+- **The stalled-batch escape from the review screen.** `ImportBatch::isStalled()` and a Cancel button on the review screen recover a batch whose confirmation `dispatch()` never reached the queue at all (`74a4936`).
+- **The upload cleanup on a failed batch insert.** `PartImports::upload()` deletes the stored file when creating its `ImportBatch` row fails, matching the two refusal paths above it that already do (`198a9bc`).
