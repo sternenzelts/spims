@@ -1,7 +1,9 @@
 <?php
 
+use App\Http\Controllers\ImportTemplateController;
 use App\Http\Controllers\MediaController;
 use App\Livewire\Admin;
+use App\Livewire\Imports;
 use App\Livewire\MasterData\Equipment;
 use App\Livewire\MasterData\StorageLocations;
 use App\Livewire\Parts;
@@ -46,6 +48,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('parts/{part}/edit', Parts\Form::class)->whereNumber('part')->name('parts.edit');
     Route::livewire('parts/{part}/stock-levels', Parts\StockLevelsForm::class)->whereNumber('part')->name('parts.stock-levels');
     Route::livewire('parts/{part}', Parts\Show::class)->whereNumber('part')->name('parts.show');
+
+    Route::livewire('imports', Imports\Index::class)->name('imports.index');
+    Route::livewire('imports/create', Imports\Upload::class)->name('imports.create');
+    Route::get('imports/template', ImportTemplateController::class)->name('imports.template');
+    Route::livewire('imports/{batch}', Imports\Review::class)->whereNumber('batch')->name('imports.show');
 
     Route::get('media/{path}', MediaController::class)
         ->where('path', '(company|personnel)/[A-Za-z0-9]+\.[A-Za-z0-9]+')

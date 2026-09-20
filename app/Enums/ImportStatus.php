@@ -26,6 +26,19 @@ enum ImportStatus: string
     }
 
     /**
+     * The badge colour the screens show this status in.
+     */
+    public function color(): string
+    {
+        return match ($this) {
+            self::Pending, self::Cancelled => 'zinc',
+            self::Validated => 'blue',
+            self::Completed => 'green',
+            self::Failed => 'red',
+        };
+    }
+
+    /**
      * Whether the batch can still be checked, imported or cancelled.
      */
     public function isOpen(): bool
