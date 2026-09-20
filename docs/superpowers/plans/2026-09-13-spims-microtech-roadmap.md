@@ -26,7 +26,7 @@ it covers, and which decisions it must settle.
 |---|---|---|---|---|---|
 | 1 | [Foundation and Stock Ledger](2026-09-13-spims-plan-01-foundation-ledger.md) | sign in; nothing stock-related on screen yet, but the ledger is proven | NFR-001, 003, 005, 013; badge protection of NFR-004; domain parts of FR-004, FR-018 | M1 | Merged 2026-09-19 (`87e922f`) |
 | 2 | [Administration and Master Data](2026-09-19-spims-plan-02-administration-master-data.md) | manage users, install settings, purposes, locations, equipment, parts, stock levels and personnel with badges | FR-001–004, FR-018; NFR-004, 010 | M1, M3 | Merged 2026-09-19 (`c351dd3`) |
-| 2b | [Spare Part and Opening Balance Import](2026-09-20-spims-plan-02b-import.md) | import spare parts and opening balances from Excel or CSV, with a dry run | FR-005 | M1, M3 | Detailed plan written 2026-09-20 |
+| 2b | [Spare Part and Opening Balance Import](2026-09-20-spims-plan-02b-import.md) | import spare parts and opening balances from Excel or CSV, with a dry run | FR-005 | M1, M3 | Merged 2026-09-20 (`49c41e9`) |
 | 3 | Withdrawal and Replenishment at the Station | issue parts with the scan-last flow, including overrides and manual identification; receive stock | FR-006–009; FR-016 (lookup); NFR-006, 007 (drafts), 009 | M2, M3 | Outline |
 | 4 | Corrections and Counting | adjust stock, reverse transactions, enter paper-fallback transactions, run physical counts | FR-010–013 | M3, M6 | Outline |
 | 5 | Analytics, Prediction, Alerts and Dashboard | see consumption, depletion and predicted stock-outs; receive and acknowledge alerts; use the dashboard | FR-014, FR-015, §10 notifications, FR-017 (dashboard) | M4 | Outline |
@@ -170,11 +170,15 @@ This covers steps 4–6 and 8 of the design §3.6 provisioning checklist. Step 7
 
 ## 3b. Plan 2b — Spare Part and Opening Balance Import
 
-**Written in full: [2026-09-20-spims-plan-02b-import.md](2026-09-20-spims-plan-02b-import.md), seven tasks.** It was
-written against `master` at `58a01c5` and against `openspout/openspout` 5.11's installed source. Q18, Microtech's
-starting parts list, is still unanswered; the plan absorbs that by matching a file's header row to its columns by
-label or alias, and letting the user re-match every column on screen, so a differently laid-out list needs no code
-change. What remains for Q18 is adding whatever spellings that list uses to `ImportColumn::aliases()`.
+**Merged 2026-09-20 (`49c41e9`): [2026-09-20-spims-plan-02b-import.md](2026-09-20-spims-plan-02b-import.md), seven
+tasks.** The plan was written against `master` at `58a01c5` and against `openspout/openspout` 5.11's installed
+source, then executed task by task with a review after each. Q18, Microtech's starting parts list, is still
+unanswered; the import absorbs that by matching a file's header row to its columns by label or alias and letting the
+user re-match every column on screen, so a differently laid-out list needs no code change. What remains for Q18 is
+adding whatever spellings that list uses to `ImportColumn::aliases()`.
+
+The plan document was reconciled with the code after execution, so its task blocks are what was actually built; its
+closing section lists every correction with the commit that made it.
 
 **Outcome.** A System Administrator, or a supervisor where permitted, imports spare parts and opening balances from an Excel or CSV file with a dry run. This is design §3.6 provisioning checklist step 7.
 
