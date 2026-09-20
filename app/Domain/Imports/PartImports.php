@@ -191,9 +191,10 @@ final readonly class PartImports
     /**
      * Record why an import stopped. Its transaction has rolled back, so this is saved on its own.
      * A refusal from a domain service explains itself; any other message may hold SQL, so it stays
-     * in the application log, where the queue worker reports it.
+     * in the application log, where the queue worker reports it. Public: ConfirmImport::failed()
+     * calls this too, for a job that dies without reaching confirm()'s own catch.
      */
-    private function markFailed(ImportBatch $batch, Throwable $exception): void
+    public function markFailed(ImportBatch $batch, Throwable $exception): void
     {
         $reason = match (true) {
             $exception instanceof DomainException, $exception instanceof StockBusy => $exception->getMessage(),
@@ -274,7 +275,13 @@ final readonly class PartImports
     {
         $locked = ImportBatch::query()->whereKey($batch->id)->lockForUpdate()->firstOrFail();
 
-        if (! $locked->status->isOpen() || $locked->confirmed_at !== null) {
+        // A job that dies before reaching confirm()'s own catch, or whose dispatch() never reached
+        // the queue at all, otherwise leaves confirmed_at set forever: past the job's own timeout it
+        // cannot still be running, so let a person check, import or cancel the batch again.
+        $stuck = $locked->confirmed_at !== null
+            && $locked->confirmed_at->addSeconds(ConfirmImport::TIMEOUT)->isPast();
+
+        if (! $locked->status->isOpen() || ($locked->confirmed_at !== null && ! $stuck)) {
             throw ImportRefused::notOpen();
         }
 

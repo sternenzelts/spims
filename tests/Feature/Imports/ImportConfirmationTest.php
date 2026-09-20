@@ -184,3 +184,38 @@ it('locks opening balances in ascending part id order to avoid deadlock', functi
     expect($posted)->toBe([$third->id, $second->id, $first->id])
         ->and(StockTransaction::query()->where('type', 'opening')->count())->toBe(2);
 });
+
+it('marks a batch Failed when the confirm job never finishes, and it can be checked again', function () {
+    Queue::fake();
+    $batch = ($this->checked)("Part number,Description,Unit of measure\nP-1,One,pcs\n");
+    app(PartImports::class)->requestConfirmation($batch, $this->admin);
+
+    // Simulates the worker calling the failed() hook without ever reaching confirm()'s own catch:
+    // an out-of-memory kill, a worker restart, or the job's own timeout.
+    (new ConfirmImport($batch->id, $this->admin->id))->failed(null);
+
+    expect($batch->refresh())
+        ->status->toBe(ImportStatus::Failed)
+        ->confirmed_at->toBeNull()
+        ->errors->toBe([['row' => 0, 'message' => 'The import stopped and nothing was saved: an unexpected error, recorded in the application log.']]);
+
+    $preview = app(PartImports::class)->check($batch, $batch->column_map, $this->admin);
+
+    expect($preview->isValid())->toBeTrue()
+        ->and($batch->refresh()->status)->toBe(ImportStatus::Validated);
+});
+
+it('lets a batch whose confirmation is older than the job timeout be cancelled, but not one confirmed a moment ago', function () {
+    Queue::fake();
+    $batch = ($this->checked)("Part number,Description,Unit of measure\nP-1,One,pcs\n");
+    app(PartImports::class)->requestConfirmation($batch, $this->admin);
+
+    expect(fn () => app(PartImports::class)->cancel($batch, $this->admin))
+        ->toThrow(ImportRefused::class);
+
+    $this->travel(ConfirmImport::TIMEOUT + 1)->seconds();
+
+    app(PartImports::class)->cancel($batch, $this->admin);
+
+    expect($batch->refresh()->status)->toBe(ImportStatus::Cancelled);
+});
