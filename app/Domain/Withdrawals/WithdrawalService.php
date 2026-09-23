@@ -4,13 +4,16 @@ namespace App\Domain\Withdrawals;
 
 use App\Domain\Audit\AuditLogger;
 use App\Domain\Withdrawals\Exceptions\WithdrawalRefused;
+use App\Enums\LevelWarning;
 use App\Enums\TransactionStatus;
 use App\Enums\TransactionType;
 use App\Models\Equipment;
 use App\Models\Part;
+use App\Models\PartStock;
 use App\Models\StockTransaction;
 use App\Models\StockTransactionLine;
 use App\Models\User;
+use App\Models\WithdrawalOverride;
 use App\Models\WithdrawalPurpose;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
@@ -211,6 +214,66 @@ final readonly class WithdrawalService
         if ($purpose->requires_remarks && ($draft->remarks === null || trim($draft->remarks) === '')) {
             throw WithdrawalRefused::remarksRequired($purpose);
         }
+    }
+
+    /**
+     * The draft as the custodian sees it at review (FR-SPIMS-006 steps 4 and 7): each line's
+     * recorded balance, the balance it will leave, and its warning. Read outside any transaction
+     * and holding no locks (design §5.2) — the balance that decides is the one read under lock at
+     * commit.
+     */
+    public function review(StockTransaction $draft): WithdrawalReview
+    {
+        $lines = $draft->lines()->with(['part.stock', 'part.defaultLocation'])->orderBy('line_no')->get();
+        $overrides = $draft->overrides()->get();
+        $reviews = [];
+
+        foreach ($lines as $line) {
+            $override = $overrides->first(
+                fn (WithdrawalOverride $override): bool => $override->part_id === $line->part_id,
+            );
+
+            $stock = $line->part->stock;
+            $onHand = BigDecimal::of($stock instanceof PartStock ? $stock->on_hand : '0');
+            $quantity = BigDecimal::of($line->quantity);
+            $isShort = $onHand->isLessThan($quantity);
+
+            // An authorised override raises the balance to the verified quantity at commit, so the
+            // resulting balance the custodian is shown is the one that override will really leave.
+            $base = $isShort && $override instanceof WithdrawalOverride
+                ? BigDecimal::of($override->verified_qty)
+                : $onHand;
+
+            $resulting = $base->minus($quantity);
+
+            $reviews[] = new LineReview(
+                line: $line,
+                onHand: (string) $onHand->toScale(3),
+                resulting: (string) $resulting->toScale(3),
+                isShort: $isShort,
+                override: $override,
+                level: $this->levelWarning($line->part, $resulting),
+            );
+        }
+
+        return new WithdrawalReview($reviews);
+    }
+
+    /**
+     * FR-SPIMS-006 step 7: at or below the minimum or critical level, the more severe first. A
+     * short line gets none — its shortage is already the warning.
+     */
+    private function levelWarning(Part $part, BigDecimal $resulting): ?LevelWarning
+    {
+        if ($resulting->isNegative()) {
+            return null;
+        }
+
+        if ($resulting->isLessThanOrEqualTo($part->critical_level)) {
+            return LevelWarning::Critical;
+        }
+
+        return $resulting->isLessThanOrEqualTo($part->min_level) ? LevelWarning::Minimum : null;
     }
 
     /**
