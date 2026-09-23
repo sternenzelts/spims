@@ -25,7 +25,10 @@ use Carbon\CarbonImmutable;
  */
 final readonly class WithdrawalService
 {
-    public function __construct(private AuditLogger $audit) {}
+    public function __construct(
+        private AuditLogger $audit,
+        private WithdrawalIdentification $identification,
+    ) {}
 
     /**
      * The custodian's open draft withdrawal, created if they have none. One per custodian, so a
@@ -214,6 +217,14 @@ final readonly class WithdrawalService
         if ($purpose->requires_remarks && ($draft->remarks === null || trim($draft->remarks) === '')) {
             throw WithdrawalRefused::remarksRequired($purpose);
         }
+
+        if ($draft->personnel_id === null || $draft->identification_method === null) {
+            throw WithdrawalRefused::notIdentified();
+        }
+
+        if (! $this->identification->isCurrent($draft)) {
+            throw WithdrawalRefused::identificationExpired($this->identification->timeoutSeconds());
+        }
     }
 
     /**
@@ -277,30 +288,15 @@ final readonly class WithdrawalService
     }
 
     /**
-     * The one place a draft's identification is cleared and its stale overrides removed. Every
-     * mutator above calls it, which is what makes the badge scan the last step (FR-SPIMS-007) and
-     * stops an authorisation outliving the quantity it was given for (FR-SPIMS-008). Never clear
-     * either of them anywhere else.
+     * The one method every mutator above calls. It prunes the overrides its lines no longer justify
+     * and clears the identification through WithdrawalIdentification, which is the only place that
+     * clearing happens. This is what makes the badge scan the last step (FR-SPIMS-007) and stops an
+     * authorisation outliving the quantity it was given for (FR-SPIMS-008).
      */
     public function invalidate(StockTransaction $draft): void
     {
         $this->pruneOverrides($draft);
-        $this->clearIdentification($draft);
-    }
-
-    private function clearIdentification(StockTransaction $draft): void
-    {
-        if ($draft->identified_at === null && $draft->personnel_id === null) {
-            return;
-        }
-
-        $draft->forceFill([
-            'identified_at' => null,
-            'personnel_id' => null,
-            'identification_method' => null,
-            'identification_authorised_by_user_id' => null,
-            'identification_reason' => null,
-        ])->save();
+        $this->identification->clear($draft);
     }
 
     /**

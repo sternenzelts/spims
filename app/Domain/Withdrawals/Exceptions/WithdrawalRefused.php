@@ -68,4 +68,29 @@ final class WithdrawalRefused extends RuntimeException
     {
         return new self(__('Remarks are required for the purpose :purpose.', ['purpose' => $purpose->name]));
     }
+
+    public static function badgeUnreadable(): self
+    {
+        return new self(__('That badge could not be read. Scan it again, or ask a supervisor to identify the person.'));
+    }
+
+    public static function badgeNotRecognised(): self
+    {
+        return new self(__('That badge is not recognised. It may not be enrolled, or the person may no longer be Active.'));
+    }
+
+    public static function scanningTooFast(int $seconds): self
+    {
+        return new self(__('Too many badge scans. Wait :seconds seconds and try again.', ['seconds' => $seconds]));
+    }
+
+    public static function notIdentified(): self
+    {
+        return new self(__('Ask the person receiving the parts to scan their badge before confirming.'));
+    }
+
+    public static function identificationExpired(int $seconds): self
+    {
+        return new self(__('The badge scan expired after :seconds seconds. Ask for a new scan.', ['seconds' => $seconds]));
+    }
 }

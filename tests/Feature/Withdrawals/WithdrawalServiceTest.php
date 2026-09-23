@@ -262,5 +262,7 @@ it('requires remarks when the purpose asks for them', function () {
 
     $this->service->setContext($draft, $this->equipment, $purpose, 'Trial fit on the new jig');
 
-    expect(fn () => $this->service->guardReadyToConfirm($draft->fresh()))->not->toThrow(WithdrawalRefused::class);
+    // Remarks are satisfied; the next thing missing is the badge scan of FR-SPIMS-007.
+    expect(fn () => $this->service->guardReadyToConfirm($draft->fresh()))
+        ->toThrow(WithdrawalRefused::class, 'scan their badge');
 });
