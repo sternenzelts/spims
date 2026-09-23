@@ -1,7 +1,12 @@
 <?php
 
 use App\Domain\Identity\PersonnelBadges;
+use App\Domain\Ledger\LedgerVerifier;
+use App\Domain\Ledger\StockLedger;
 use App\Domain\Settings\InstallSettings;
+use App\Domain\Withdrawals\WithdrawalIdentification;
+use App\Domain\Withdrawals\WithdrawalService;
+use App\Enums\Role;
 use App\Livewire\Admin\InstallSettingsForm;
 use App\Livewire\Imports\Review as ImportReview;
 use App\Livewire\Imports\Upload as ImportUpload;
@@ -9,10 +14,12 @@ use App\Livewire\MasterData\Equipment\Form as EquipmentForm;
 use App\Livewire\MasterData\StorageLocations\Form as StorageLocationForm;
 use App\Livewire\Personnel\Form as PersonnelForm;
 use App\Models\AuditLog;
+use App\Models\Equipment;
 use App\Models\ImportBatch;
 use App\Models\Part;
 use App\Models\Personnel;
 use App\Models\User;
+use App\Models\WithdrawalPurpose;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
@@ -88,4 +95,29 @@ it('provisions an install through the screens alone: design §3.6 steps 4 to 8',
         ->and(app(PersonnelBadges::class)->identify('A12345678')?->employee_no)->toBe('EMP-00042')
         ->and(AuditLog::query()->where('user_id', $admin->id)->distinct()->pluck('auditable_type')->sort()->values()->all())
         ->toBe(['equipment', 'import_batch', 'part', 'personnel', 'setting', 'stock_transaction', 'storage_location']);
+});
+
+it('issues a spare part once the install is provisioned', function () {
+    configureInstall();
+    $custodian = userWithRoles(Role::Custodian);
+    $part = partWithStock('10');
+    $person = Personnel::factory()->create();
+    app(PersonnelBadges::class)->enroll($person, 'A1234BCDE', $custodian);
+
+    $withdrawals = app(WithdrawalService::class);
+    $draft = $withdrawals->openDraft($custodian);
+    $withdrawals->addLine($draft, $part, '3');
+    $withdrawals->setContext(
+        $draft,
+        Equipment::factory()->create(),
+        WithdrawalPurpose::query()->where('is_active', true)->orderBy('sort_order')->firstOrFail(),
+        null,
+    );
+    app(WithdrawalIdentification::class)->identify($draft->fresh(), 'A1234BCDE', $custodian);
+    $withdrawals->guardReadyToConfirm($draft->fresh());
+    $completed = app(StockLedger::class)->completeWithOverrides($draft->fresh(), $custodian);
+
+    expect($completed->transaction_no)->toStartWith('WD-')
+        ->and(onHand($part))->toBe('7.000')
+        ->and(app(LedgerVerifier::class)->verify())->toBe([]);
 });

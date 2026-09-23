@@ -10,6 +10,8 @@ use App\Livewire\MasterData\StorageLocations\Form as StorageLocationForm;
 use App\Livewire\Parts\Form as PartForm;
 use App\Livewire\Parts\StockLevelsForm;
 use App\Livewire\Personnel\Form as PersonnelForm;
+use App\Livewire\Station\Replenishment as StationReplenishment;
+use App\Livewire\Station\Withdrawal as StationWithdrawal;
 use App\Livewire\Users\Form as UserForm;
 use App\Models\Equipment;
 use App\Models\ImportBatch;
@@ -68,6 +70,60 @@ dataset('reauthorized actions', [
     ],
     'Imports\Review::cancel' => [
         Role::Supervisor, ImportReview::class, fn () => ['batch' => ImportBatch::factory()->create()], 'cancel', fn () => [],
+    ],
+    // Every station action calls authorize() as its first statement, which is why a row can pass
+    // an argument the action never reaches: scan with no badge and confirm on an empty draft are
+    // both refused before either is looked at.
+    'Station\Withdrawal::enterPart' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'enterPart', fn () => [],
+    ],
+    'Station\Withdrawal::addPart' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'addPart', fn () => [Part::factory()->create()->id],
+    ],
+    'Station\Withdrawal::removeLine' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'removeLine', fn () => [0],
+    ],
+    'Station\Withdrawal::saveContext' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'saveContext', fn () => [],
+    ],
+    'Station\Withdrawal::scan' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'scan', fn () => [],
+    ],
+    'Station\Withdrawal::clearIdentification' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'clearIdentification', fn () => [],
+    ],
+    'Station\Withdrawal::requestOverride' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'requestOverride', fn () => [Part::factory()->create()->id],
+    ],
+    'Station\Withdrawal::authoriseOverride' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'authoriseOverride', fn () => [],
+    ],
+    'Station\Withdrawal::identifyManually' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'identifyManually', fn () => [],
+    ],
+    'Station\Withdrawal::confirm' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'confirm', fn () => [],
+    ],
+    'Station\Withdrawal::cancelDraft' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'cancelDraft', fn () => [],
+    ],
+    'Station\Replenishment::saveDelivery' => [
+        Role::Custodian, StationReplenishment::class, fn () => [], 'saveDelivery', fn () => [],
+    ],
+    'Station\Replenishment::enterPart' => [
+        Role::Custodian, StationReplenishment::class, fn () => [], 'enterPart', fn () => [],
+    ],
+    'Station\Replenishment::addPart' => [
+        Role::Custodian, StationReplenishment::class, fn () => [], 'addPart', fn () => [Part::factory()->create()->id],
+    ],
+    'Station\Replenishment::removeLine' => [
+        Role::Custodian, StationReplenishment::class, fn () => [], 'removeLine', fn () => [0],
+    ],
+    'Station\Replenishment::confirm' => [
+        Role::Custodian, StationReplenishment::class, fn () => [], 'confirm', fn () => [],
+    ],
+    'Station\Replenishment::cancelDraft' => [
+        Role::Custodian, StationReplenishment::class, fn () => [], 'cancelDraft', fn () => [],
     ],
 ]);
 

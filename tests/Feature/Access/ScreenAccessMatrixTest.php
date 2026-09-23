@@ -5,6 +5,7 @@ use App\Models\Equipment;
 use App\Models\ImportBatch;
 use App\Models\Part;
 use App\Models\Personnel;
+use App\Models\StockTransaction;
 use App\Models\StorageLocation;
 use App\Models\User;
 
@@ -35,6 +36,14 @@ $screens = [
     'New spare part import' => ['imports.create', null, '-S-A'],
     'Import template' => ['imports.template', null, '-S-A'],
     'Spare part import' => ['imports.show', fn () => ['batch' => ImportBatch::factory()->create()], '-S-A'],
+    'Withdrawal station' => ['station.withdrawal', null, 'CS--'],
+    'Transaction record' => [
+        'station.receipt',
+        fn () => ['transaction' => StockTransaction::factory()->create()],
+        'CSPA',
+    ],
+    'Record a delivery' => ['station.replenishment', null, 'CS--'],
+    'Part lookup' => ['station.part-lookup', null, 'CSPA'],
 ];
 
 dataset('screens', function () use ($screens) {

@@ -51,5 +51,8 @@ it('drops the starter kit links', function () {
 
 it('shows each user only the menu items they may open', function () {
     expect(menuLabels(User::factory()->create()))->toBe([])
-        ->and(menuLabels(userWithRoles(Role::Custodian)))->toContain('Dashboard');
+        ->and(menuLabels(userWithRoles(Role::Custodian)))
+        ->toBe(['Dashboard', 'Withdrawal station', 'Record a delivery', 'Part lookup', 'Spare parts'])
+        ->and(menuLabels(userWithRoles(Role::Planner)))
+        ->not->toContain('Withdrawal station');
 });

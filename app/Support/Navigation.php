@@ -16,6 +16,9 @@ final class Navigation
      */
     private const array ITEMS = [
         ['group' => 'Storeroom', 'label' => 'Dashboard', 'icon' => 'home', 'route' => 'dashboard', 'active' => 'dashboard', 'permission' => Permission::DashboardView],
+        ['group' => 'Storeroom', 'label' => 'Withdrawal station', 'icon' => 'arrow-up-on-square', 'route' => 'station.withdrawal', 'active' => 'station.withdrawal', 'permission' => Permission::WithdrawalsProcess],
+        ['group' => 'Storeroom', 'label' => 'Record a delivery', 'icon' => 'truck', 'route' => 'station.replenishment', 'active' => 'station.replenishment', 'permission' => Permission::ReplenishmentsRecord],
+        ['group' => 'Storeroom', 'label' => 'Part lookup', 'icon' => 'magnifying-glass', 'route' => 'station.part-lookup', 'active' => 'station.part-lookup', 'permission' => Permission::PartsView],
         ['group' => 'Storeroom', 'label' => 'Spare parts', 'icon' => 'cube', 'route' => 'parts.index', 'active' => 'parts.*', 'permission' => Permission::PartsView],
         ['group' => 'Master data', 'label' => 'Storage locations', 'icon' => 'map-pin', 'route' => 'storage-locations.index', 'active' => 'storage-locations.*', 'permission' => Permission::EquipmentLocationsManage],
         ['group' => 'Master data', 'label' => 'Equipment', 'icon' => 'wrench-screwdriver', 'route' => 'equipment.index', 'active' => 'equipment.*', 'permission' => Permission::EquipmentLocationsManage],
