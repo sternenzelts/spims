@@ -10,6 +10,7 @@ use App\Domain\Identity\PersonnelBadges;
 use App\Domain\Settings\InstallSettings;
 use App\Domain\Withdrawals\Exceptions\WithdrawalRefused;
 use App\Enums\IdentificationMethod;
+use App\Enums\Permission;
 use App\Enums\TransactionStatus;
 use App\Models\Personnel;
 use App\Models\StockTransaction;
@@ -82,6 +83,53 @@ final readonly class WithdrawalIdentification
         ])->save();
 
         return $personnel;
+    }
+
+    /**
+     * FR-SPIMS-007 alternate flow: the person has no badge, or the reader has failed, and an
+     * Inventory Supervisor identifies them by hand with a reason. The withdrawal is marked
+     * supervisor_manual and appears in the Plan 6 Exceptions report. Pending Microtech's answer to
+     * Q12.
+     *
+     * @throws WithdrawalRefused
+     */
+    public function identifyManually(
+        StockTransaction $draft,
+        Personnel $personnel,
+        User $supervisor,
+        string $reason,
+    ): void {
+        if ($draft->status !== TransactionStatus::Draft) {
+            throw WithdrawalRefused::notADraft($draft);
+        }
+
+        if (! $supervisor->can(Permission::IdentificationAuthorise)) {
+            throw WithdrawalRefused::notAllowedToIdentify($supervisor);
+        }
+
+        $reason = trim($reason);
+
+        if ($reason === '') {
+            throw WithdrawalRefused::identificationReasonRequired();
+        }
+
+        if (! $personnel->is_active) {
+            throw WithdrawalRefused::inactivePersonnel($personnel);
+        }
+
+        $draft->forceFill([
+            'personnel_id' => $personnel->id,
+            'identification_method' => IdentificationMethod::SupervisorManual,
+            'identification_authorised_by_user_id' => $supervisor->id,
+            'identification_reason' => $reason,
+            'identified_at' => CarbonImmutable::now(),
+        ])->save();
+
+        $this->audit->record('identified_manually', $draft, null, [
+            'reason' => $reason,
+            'personnel_id' => $personnel->id,
+            'identification_method' => IdentificationMethod::SupervisorManual->value,
+        ], $supervisor);
     }
 
     /**

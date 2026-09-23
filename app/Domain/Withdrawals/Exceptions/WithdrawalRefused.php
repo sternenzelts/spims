@@ -4,7 +4,9 @@ namespace App\Domain\Withdrawals\Exceptions;
 
 use App\Models\Equipment;
 use App\Models\Part;
+use App\Models\Personnel;
 use App\Models\StockTransaction;
+use App\Models\User;
 use App\Models\WithdrawalPurpose;
 use RuntimeException;
 
@@ -92,5 +94,22 @@ final class WithdrawalRefused extends RuntimeException
     public static function identificationExpired(int $seconds): self
     {
         return new self(__('The badge scan expired after :seconds seconds. Ask for a new scan.', ['seconds' => $seconds]));
+    }
+
+    public static function notAllowedToIdentify(User $user): self
+    {
+        return new self(__(':name is not allowed to identify someone without a badge.', ['name' => $user->name]));
+    }
+
+    public static function identificationReasonRequired(): self
+    {
+        return new self(__('Give the reason the badge could not be scanned.'));
+    }
+
+    public static function inactivePersonnel(Personnel $personnel): self
+    {
+        return new self(__(':name is no longer Active and cannot receive spare parts.', [
+            'name' => $personnel->full_name,
+        ]));
     }
 }
