@@ -8,6 +8,7 @@ use App\Models\Part;
 use App\Models\StockMovement;
 use App\Models\StockTransaction;
 use App\Models\User;
+use App\Models\WithdrawalOverride;
 use Brick\Math\BigDecimal;
 use Carbon\CarbonImmutable;
 
@@ -63,6 +64,39 @@ it('keeps every balance equal to its ledger through random postings and backdate
         }
 
         $draft = $factory->withLines($lines)->create(['custodian_user_id' => $custodian->id]);
+
+        // Design §5.3: one short withdrawal in three is issued anyway, after a supervisor counts
+        // the shelf and authorises every short line. Two transactions per posting, one lock
+        // acquisition, and every overridden part lands exactly on zero — the boundary the
+        // on_hand >= 0 constraint guards.
+        if ($type === TransactionType::Withdrawal && $wouldGoNegative && mt_rand(1, 3) === 1) {
+            $overridden = [];
+
+            foreach ($lines as [$part, $quantity]) {
+                if ($expected[$part->id]->isLessThan($quantity)) {
+                    $overridden[$part->id] = true;
+                    WithdrawalOverride::factory()->create([
+                        'stock_transaction_id' => $draft->id,
+                        'part_id' => $part->id,
+                        'verified_qty' => $quantity,
+                        'recorded_on_hand' => (string) $expected[$part->id],
+                        'authorised_by_user_id' => $custodian->id,
+                    ]);
+                }
+            }
+
+            $ledger->completeWithOverrides($draft, $custodian);
+
+            foreach ($lines as [$part, $quantity]) {
+                $expected[$part->id] = isset($overridden[$part->id])
+                    ? BigDecimal::zero()
+                    : $expected[$part->id]->minus($quantity);
+            }
+
+            $this->travel(mt_rand(1, 240))->minutes();
+
+            continue;
+        }
 
         try {
             $ledger->complete($draft, $custodian);

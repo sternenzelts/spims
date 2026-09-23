@@ -113,7 +113,15 @@ function postConcurrently(array $transactionIds, array $lockedPartIds): array
             // __invoke() takes none, so the container cannot inject anything into this closure.
             $post = static function () use ($transactionId): string {
                 try {
-                    app(StockLedger::class)->complete(StockTransaction::query()->findOrFail($transactionId), User::query()->firstOrFail());
+                    $draft = StockTransaction::query()->findOrFail($transactionId);
+                    $actor = User::query()->firstOrFail();
+                    $ledger = app(StockLedger::class);
+
+                    // A withdrawal carrying supervisor overrides posts through its own path
+                    // (Plan 3 Task 7); StockLedger::complete() refuses one.
+                    $draft->overrides()->exists()
+                        ? $ledger->completeWithOverrides($draft, $actor)
+                        : $ledger->complete($draft, $actor);
 
                     return 'completed';
                 } catch (InsufficientStock) {
