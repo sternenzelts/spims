@@ -59,6 +59,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('station/receipt/{transaction}', Station\Receipt::class)
         ->whereNumber('transaction')
         ->name('station.receipt');
+    Route::livewire('station/replenishment', Station\Replenishment::class)->name('station.replenishment');
+    Route::livewire('station/part-lookup', Station\PartLookup::class)->name('station.part-lookup');
 
     Route::get('media/{path}', MediaController::class)
         ->where('path', '(company|personnel)/[A-Za-z0-9]+\.[A-Za-z0-9]+')

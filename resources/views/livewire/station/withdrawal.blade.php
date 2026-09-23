@@ -1,5 +1,11 @@
 <section class="w-full">
-    <flux:heading size="xl" level="1" class="mb-6">{{ __('Withdrawal station') }}</flux:heading>
+    <div class="mb-6 flex items-center justify-between gap-4">
+        <flux:heading size="xl" level="1">{{ __('Withdrawal station') }}</flux:heading>
+
+        <flux:button icon="magnifying-glass" :href="route('station.part-lookup')" wire:navigate>
+            {{ __('Part lookup') }}
+        </flux:button>
+    </div>
 
     <flux:error name="draft" />
 
