@@ -112,4 +112,36 @@ final class WithdrawalRefused extends RuntimeException
             'name' => $personnel->full_name,
         ]));
     }
+
+    public static function notAllowedToOverride(User $user): self
+    {
+        return new self(__(':name is not allowed to authorise an override. Ask an Inventory Supervisor.', [
+            'name' => $user->name,
+        ]));
+    }
+
+    public static function partNotOnDraft(Part $part): self
+    {
+        return new self(__('Spare part :part is not on this withdrawal.', ['part' => $part->part_number]));
+    }
+
+    public static function verifiedQuantityTooLow(Part $part, string $quantity): self
+    {
+        return new self(__('The verified quantity for :part must be at least :quantity.', [
+            'part' => $part->part_number,
+            'quantity' => $quantity,
+        ]));
+    }
+
+    public static function overrideNotNeeded(Part $part): self
+    {
+        return new self(__('There is already enough :part recorded; no override is needed.', [
+            'part' => $part->part_number,
+        ]));
+    }
+
+    public static function invalidOverrideReason(): self
+    {
+        return new self(__('An override reason must be Found Stock or Unrecorded Receipt.'));
+    }
 }

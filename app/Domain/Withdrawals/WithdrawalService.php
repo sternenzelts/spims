@@ -5,6 +5,8 @@ namespace App\Domain\Withdrawals;
 use App\Domain\Audit\AuditLogger;
 use App\Domain\Withdrawals\Exceptions\WithdrawalRefused;
 use App\Enums\LevelWarning;
+use App\Enums\Permission;
+use App\Enums\ReasonCode;
 use App\Enums\TransactionStatus;
 use App\Enums\TransactionType;
 use App\Models\Equipment;
@@ -188,6 +190,74 @@ final readonly class WithdrawalService
             ['status' => TransactionStatus::Cancelled->value],
             $actor,
         );
+    }
+
+    /**
+     * PRD FR-SPIMS-008 steps 1 to 5: a supervisor has counted the shelf and authorises issuing more
+     * of a part than the recorded balance holds. The authorisation is attached to the Draft and no
+     * lock is taken — a human step cannot be performed while holding row locks (design §5.3).
+     * The adjustment it will post is computed under lock at commit, in
+     * StockLedger::completeWithOverrides(), never from recorded_on_hand here.
+     *
+     * @throws WithdrawalRefused
+     */
+    public function authoriseOverride(
+        StockTransaction $draft,
+        Part $part,
+        string $verifiedQty,
+        ReasonCode $reason,
+        User $supervisor,
+    ): WithdrawalOverride {
+        $this->guardDraft($draft);
+
+        if (! $supervisor->can(Permission::OverridesAuthorise)) {
+            throw WithdrawalRefused::notAllowedToOverride($supervisor);
+        }
+
+        if (! in_array($reason, WithdrawalOverride::REASONS, true)) {
+            throw WithdrawalRefused::invalidOverrideReason();
+        }
+
+        $line = $draft->lines()->where('part_id', $part->id)->first();
+
+        if (! $line instanceof StockTransactionLine) {
+            throw WithdrawalRefused::partNotOnDraft($part);
+        }
+
+        $verified = $this->quantity($verifiedQty);
+        $quantity = BigDecimal::of($line->quantity);
+
+        if ($verified->isLessThan($quantity)) {
+            throw WithdrawalRefused::verifiedQuantityTooLow($part, (string) $quantity->toScale(3));
+        }
+
+        $stock = PartStock::query()->find($part->id);
+        $onHand = BigDecimal::of($stock instanceof PartStock ? $stock->on_hand : '0');
+
+        if (! $onHand->isLessThan($quantity)) {
+            throw WithdrawalRefused::overrideNotNeeded($part);
+        }
+
+        $override = $draft->overrides()->updateOrCreate(['part_id' => $part->id], [
+            'verified_qty' => (string) $verified,
+            'recorded_on_hand' => (string) $onHand->toScale(3),
+            'reason_code' => $reason,
+            'authorised_by_user_id' => $supervisor->id,
+            'authorised_at' => CarbonImmutable::now(),
+        ]);
+
+        $this->audit->record('override_authorised', $override, null, [
+            'part_id' => $part->id,
+            'reason_code' => $reason->value,
+            'verified_qty' => (string) $verified,
+            'recorded_on_hand' => (string) $onHand->toScale(3),
+        ], $supervisor);
+
+        // The cart's stock story changed, so any scan taken before this one is no longer the last
+        // step. The override itself survives: its line is within the quantity just verified.
+        $this->invalidate($draft);
+
+        return $override;
     }
 
     /**
