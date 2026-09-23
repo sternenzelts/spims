@@ -27,7 +27,7 @@ it covers, and which decisions it must settle.
 | 1 | [Foundation and Stock Ledger](2026-09-13-spims-plan-01-foundation-ledger.md) | sign in; nothing stock-related on screen yet, but the ledger is proven | NFR-001, 003, 005, 013; badge protection of NFR-004; domain parts of FR-004, FR-018 | M1 | Merged 2026-09-19 (`87e922f`) |
 | 2 | [Administration and Master Data](2026-09-19-spims-plan-02-administration-master-data.md) | manage users, install settings, purposes, locations, equipment, parts, stock levels and personnel with badges | FR-001–004, FR-018; NFR-004, 010 | M1, M3 | Merged 2026-09-19 (`c351dd3`) |
 | 2b | [Spare Part and Opening Balance Import](2026-09-20-spims-plan-02b-import.md) | import spare parts and opening balances from Excel or CSV, with a dry run | FR-005 | M1, M3 | Merged 2026-09-20 (`49c41e9`) |
-| 3 | Withdrawal and Replenishment at the Station | issue parts with the scan-last flow, including overrides and manual identification; receive stock | FR-006–009; FR-016 (lookup); NFR-006, 007 (drafts), 009 | M2, M3 | Outline |
+| 3 | [Withdrawal and Replenishment at the Station](2026-09-23-spims-plan-03-withdrawal-replenishment.md) | issue parts with the scan-last flow, including overrides and manual identification; receive stock | FR-006–009; FR-016 (lookup); NFR-006, 007 (drafts), 009 | M2, M3 | Written 2026-09-23 |
 | 4 | Corrections and Counting | adjust stock, reverse transactions, enter paper-fallback transactions, run physical counts | FR-010–013 | M3, M6 | Outline |
 | 5 | Analytics, Prediction, Alerts and Dashboard | see consumption, depletion and predicted stock-outs; receive and acknowledge alerts; use the dashboard | FR-014, FR-015, §10 notifications, FR-017 (dashboard) | M4 | Outline |
 | 6 | Reports and Exports | run reports A–K and export them; view movement history | FR-016, FR-017 (reports); NFR-003 (export audit) | M5 | Outline |
@@ -214,6 +214,17 @@ closing section lists every correction with the commit that made it.
 ---
 
 ## 4. Plan 3 — Withdrawal and Replenishment at the Station
+
+**Written in full 2026-09-23:**
+[2026-09-23-spims-plan-03-withdrawal-replenishment.md](2026-09-23-spims-plan-03-withdrawal-replenishment.md),
+twelve tasks, against `master` at `80595b3`. Its "Decisions Made in This Plan" section settles the three
+decisions listed at the end of this section, and two of them narrow what this outline promised:
+
+- **The keyboard-only browser test below is deferred to Plan 6**, which is the first plan with enough
+  screens to justify a browser driver in CI. Plan 3 covers the keyboard contract with Livewire
+  assertions and a mandatory manual browser walk in its "Done When".
+- **A replenishment received on an earlier day is refused and carried to Plan 4**, because a past
+  `occurred_at` needs `is_backdated`, which drags in FR-012's paper form, reason and day limit.
 
 **Outcome.** At the station, a custodian:
 
@@ -485,8 +496,8 @@ These are deliberately left to the plan that owns them, and recorded here so the
 
 | Gap | Owner |
 |---|---|
-| Where a draft stores its identification time and a supervisor override authorization | Plan 3 |
-| How a supervisor authenticates at the station without replacing the custodian's session | Plan 3 |
+| Where a draft stores its identification time and a supervisor override authorization | Plan 3 — settled: `stock_transactions.identified_at`, and a `withdrawal_overrides` row per short line |
+| How a supervisor authenticates at the station without replacing the custodian's session | Plan 3 — settled: `CounterAuthorisation` verifies their own password and never calls `Auth::login()` |
 | The inventory discrepancy alert is raised before the `alerts` table exists; resolved with an event that Plan 5 handles | Plans 3 → 5 |
 | A transaction origin marker, so override and count adjustments are identifiable as non-reversible | Plan 4 |
 | The transaction type used by count postings | Plan 4 |
