@@ -14,6 +14,7 @@ use App\Models\Setting;
 use App\Models\StockTransaction;
 use App\Models\StorageLocation;
 use App\Models\User;
+use App\Models\WithdrawalOverride;
 use App\Models\WithdrawalPurpose;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Relations\Relation;
@@ -87,6 +88,7 @@ class AppServiceProvider extends ServiceProvider
             'personnel' => Personnel::class,
             'stock_transaction' => StockTransaction::class,
             'import_batch' => ImportBatch::class,
+            'withdrawal_override' => WithdrawalOverride::class,
         ]);
     }
 }

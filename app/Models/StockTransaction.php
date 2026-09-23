@@ -42,6 +42,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $identification_authorised_by_user_id
  * @property string|null $identification_reason
  * @property string|null $paper_form_no
+ * @property CarbonImmutable|null $identified_at
  * @property CarbonImmutable $created_at
  * @property CarbonImmutable $updated_at
  * @property-read User $custodian
@@ -50,6 +51,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property-read WithdrawalPurpose|null $purpose
  * @property-read Collection<int, StockTransactionLine> $lines
  * @property-read Collection<int, StockMovement> $movements
+ * @property-read Collection<int, WithdrawalOverride> $overrides
  */
 #[Fillable([
     'type', 'custodian_user_id', 'personnel_id', 'equipment_id', 'purpose_id', 'supplier', 'reference_no',
@@ -73,6 +75,7 @@ class StockTransaction extends Model
             'identification_method' => IdentificationMethod::class,
             'occurred_at' => 'datetime',
             'recorded_at' => 'datetime',
+            'identified_at' => 'datetime',
             'is_backdated' => 'boolean',
         ];
     }
@@ -123,5 +126,15 @@ class StockTransaction extends Model
     public function movements(): HasMany
     {
         return $this->hasMany(StockMovement::class);
+    }
+
+    /**
+     * Supervisor authorisations to issue more than the recorded balance (PRD FR-SPIMS-008).
+     *
+     * @return HasMany<WithdrawalOverride, $this>
+     */
+    public function overrides(): HasMany
+    {
+        return $this->hasMany(WithdrawalOverride::class);
     }
 }
