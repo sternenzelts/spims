@@ -1,0 +1,402 @@
+<?php
+
+namespace App\Livewire\Station;
+
+use App\Domain\Access\CounterAuthorisation;
+use App\Domain\Access\Exceptions\AuthorisationRefused;
+use App\Domain\Ledger\Exceptions\InstallNotConfigured;
+use App\Domain\Ledger\Exceptions\InsufficientStock;
+use App\Domain\Ledger\Exceptions\StockBusy;
+use App\Domain\Ledger\Shortage;
+use App\Domain\Ledger\StockLedger;
+use App\Domain\Parts\PartSearch;
+use App\Domain\Withdrawals\Exceptions\WithdrawalRefused;
+use App\Domain\Withdrawals\WithdrawalIdentification;
+use App\Domain\Withdrawals\WithdrawalReview;
+use App\Domain\Withdrawals\WithdrawalService;
+use App\Enums\Permission;
+use App\Enums\ReasonCode;
+use App\Livewire\Concerns\ActsAsSignedInUser;
+use App\Models\Equipment;
+use App\Models\Part;
+use App\Models\Personnel;
+use App\Models\StockTransaction;
+use App\Models\StockTransactionLine;
+use App\Models\WithdrawalPurpose;
+use Flux\Flux;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Str;
+use Livewire\Attributes\Computed;
+use Livewire\Attributes\Title;
+use Livewire\Component;
+
+/**
+ * The withdrawal station (design §5.1, PRD FR-SPIMS-006 to 008). Keyboard first: the part entry and
+ * the badge scan both submit on Enter, which is what a keyboard-wedge reader sends.
+ *
+ * No rule is implemented here. Every refusal comes from a domain exception and is shown as written,
+ * because these messages are read out loud at a counter.
+ */
+#[Title('Withdrawal station')]
+class Withdrawal extends Component
+{
+    use ActsAsSignedInUser;
+
+    public string $partEntry = '';
+
+    public string $quantity = '1';
+
+    public string $equipmentId = '';
+
+    public string $purposeId = '';
+
+    public string $remarks = '';
+
+    public string $badge = '';
+
+    public int $overridePartId = 0;
+
+    public string $verifiedQty = '';
+
+    public string $overrideReason = '';
+
+    public string $manualPersonnelId = '';
+
+    public string $manualReason = '';
+
+    /** Shared by the override and manual-identification dialogs. Never persisted. */
+    public string $supervisorEmail = '';
+
+    public string $supervisorPassword = '';
+
+    public function mount(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+
+        $draft = $this->draft();
+        $this->equipmentId = (string) ($draft->equipment_id ?? '');
+        $this->purposeId = (string) ($draft->purpose_id ?? '');
+        $this->remarks = (string) ($draft->remarks ?? '');
+        $this->overrideReason = ReasonCode::FoundStock->value;
+    }
+
+    /**
+     * Step 2 of design §5.1. An exact part number is added straight away; anything else leaves the
+     * entry in place and the matches below it (FR-SPIMS-006 alternate flow).
+     */
+    public function enterPart(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        $entry = trim($this->partEntry);
+
+        if ($entry === '') {
+            return;
+        }
+
+        $part = Part::query()->whereRaw('lower(part_number) = ?', [Str::lower($entry)])->first();
+
+        if (! $part instanceof Part) {
+            $this->addError('partEntry', __('No spare part has that number. Pick one from the matches below.'));
+
+            return;
+        }
+
+        $this->addPart($part->id);
+    }
+
+    public function addPart(int $partId): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        try {
+            app(WithdrawalService::class)->addLine($this->draft(), Part::query()->findOrFail($partId), $this->quantity);
+        } catch (WithdrawalRefused $refused) {
+            $this->addError('partEntry', $refused->getMessage());
+
+            return;
+        }
+
+        $this->partEntry = '';
+        $this->quantity = '1';
+        $this->forget();
+    }
+
+    public function removeLine(int $lineId): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        $draft = $this->draft();
+        $line = $draft->lines()->whereKey($lineId)->first();
+
+        if ($line instanceof StockTransactionLine) {
+            app(WithdrawalService::class)->removeLine($draft, $line);
+        }
+
+        $this->forget();
+    }
+
+    public function saveContext(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        try {
+            app(WithdrawalService::class)->setContext(
+                $this->draft(),
+                $this->equipmentId === '' ? null : Equipment::query()->findOrFail((int) $this->equipmentId),
+                $this->purposeId === '' ? null : WithdrawalPurpose::query()->findOrFail((int) $this->purposeId),
+                $this->remarks,
+            );
+        } catch (WithdrawalRefused $refused) {
+            $this->addError('equipmentId', $refused->getMessage());
+
+            return;
+        }
+
+        $this->forget();
+    }
+
+    /**
+     * Step 5 of design §5.1: the reader types the UID and presses Enter.
+     */
+    public function scan(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        try {
+            app(WithdrawalIdentification::class)->identify($this->draft(), $this->badge, $this->actor());
+        } catch (WithdrawalRefused $refused) {
+            $this->addError('badge', $refused->getMessage());
+
+            return;
+        } finally {
+            $this->badge = '';
+        }
+
+        $this->forget();
+    }
+
+    /**
+     * FR-SPIMS-007 alternate flow: the person at the counter is not the one on screen.
+     */
+    public function clearIdentification(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+
+        app(WithdrawalIdentification::class)->clear($this->draft());
+
+        $this->forget();
+    }
+
+    public function requestOverride(int $partId): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        $this->overridePartId = $partId;
+        $this->verifiedQty = '';
+        $this->overrideReason = ReasonCode::FoundStock->value;
+        $this->supervisorEmail = '';
+        $this->supervisorPassword = '';
+
+        Flux::modal('supervisor-override')->show();
+    }
+
+    /**
+     * FR-SPIMS-008 steps 2 to 5. The supervisor's credentials identify them; they never sign in,
+     * and the station stays the custodian's.
+     */
+    public function authoriseOverride(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        try {
+            $supervisor = app(CounterAuthorisation::class)->verify(
+                $this->supervisorEmail,
+                $this->supervisorPassword,
+                Permission::OverridesAuthorise,
+                (string) request()->ip(),
+            );
+
+            app(WithdrawalService::class)->authoriseOverride(
+                $this->draft(),
+                Part::query()->findOrFail($this->overridePartId),
+                $this->verifiedQty,
+                ReasonCode::from($this->overrideReason),
+                $supervisor,
+            );
+        } catch (AuthorisationRefused $refused) {
+            $this->addError('supervisorPassword', $refused->getMessage());
+
+            return;
+        } catch (WithdrawalRefused $refused) {
+            $this->addError('verifiedQty', $refused->getMessage());
+
+            return;
+        } finally {
+            $this->supervisorPassword = '';
+        }
+
+        Flux::modal('supervisor-override')->close();
+        Flux::toast(variant: 'success', text: __('Override authorised. The adjustment is recorded when you confirm.'));
+        $this->forget();
+    }
+
+    /**
+     * FR-SPIMS-007 alternate flow, pending Microtech's answer to Q12.
+     */
+    public function identifyManually(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        try {
+            $supervisor = app(CounterAuthorisation::class)->verify(
+                $this->supervisorEmail,
+                $this->supervisorPassword,
+                Permission::IdentificationAuthorise,
+                (string) request()->ip(),
+            );
+
+            app(WithdrawalIdentification::class)->identifyManually(
+                $this->draft(),
+                Personnel::query()->findOrFail((int) $this->manualPersonnelId),
+                $supervisor,
+                $this->manualReason,
+            );
+        } catch (AuthorisationRefused $refused) {
+            $this->addError('supervisorPassword', $refused->getMessage());
+
+            return;
+        } catch (WithdrawalRefused $refused) {
+            $this->addError('manualReason', $refused->getMessage());
+
+            return;
+        } finally {
+            $this->supervisorPassword = '';
+        }
+
+        Flux::modal('manual-identification')->close();
+        $this->forget();
+    }
+
+    /**
+     * Steps 6 to 8 of design §5.1, in one short database transaction.
+     */
+    public function confirm(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        $draft = $this->draft();
+
+        try {
+            app(WithdrawalService::class)->guardReadyToConfirm($draft);
+            $completed = app(StockLedger::class)->completeWithOverrides($draft, $this->actor());
+        } catch (WithdrawalRefused|InstallNotConfigured $refused) {
+            $this->addError('draft', $refused->getMessage());
+
+            return;
+        } catch (InsufficientStock $short) {
+            $this->addError('draft', __('Stock changed while you were reviewing. Short: :parts', [
+                'parts' => implode(', ', array_map(
+                    fn (Shortage $shortage): string => $shortage->partNumber,
+                    $short->shortages,
+                )),
+            ]));
+            $this->forget();
+
+            return;
+        } catch (StockBusy $busy) {
+            $this->addError('draft', $busy->getMessage());
+
+            return;
+        }
+
+        $this->redirectRoute('station.receipt', ['transaction' => $completed->id], navigate: true);
+    }
+
+    public function cancelDraft(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+
+        app(WithdrawalService::class)->cancel($this->draft(), $this->actor());
+
+        $this->reset(['partEntry', 'quantity', 'equipmentId', 'purposeId', 'remarks', 'badge']);
+        $this->forget();
+
+        Flux::toast(variant: 'success', text: __('Withdrawal cancelled. Nothing was recorded.'));
+    }
+
+    #[Computed]
+    public function draft(): StockTransaction
+    {
+        return app(WithdrawalService::class)->openDraft($this->actor());
+    }
+
+    #[Computed]
+    public function review(): WithdrawalReview
+    {
+        return app(WithdrawalService::class)->review($this->draft());
+    }
+
+    /**
+     * The spare parts an entry that is not a part number matches (FR-SPIMS-006 alternate flow).
+     *
+     * @return Collection<int, Part>
+     */
+    #[Computed]
+    public function matches(): Collection
+    {
+        if (trim($this->partEntry) === '') {
+            return new Collection;
+        }
+
+        return app(PartSearch::class)->matching($this->partEntry)
+            ->where('is_active', true)
+            ->with(['stock', 'defaultLocation'])
+            ->limit(8)
+            ->get();
+    }
+
+    /**
+     * @return Collection<int, Equipment>
+     */
+    #[Computed]
+    public function equipmentOptions(): Collection
+    {
+        return Equipment::query()->where('is_active', true)->orderBy('code')->get();
+    }
+
+    /**
+     * @return Collection<int, WithdrawalPurpose>
+     */
+    #[Computed]
+    public function purposeOptions(): Collection
+    {
+        return WithdrawalPurpose::query()->where('is_active', true)->orderBy('sort_order')->get();
+    }
+
+    /**
+     * @return Collection<int, Personnel>
+     */
+    #[Computed]
+    public function personnelOptions(): Collection
+    {
+        return Personnel::query()->where('is_active', true)->orderBy('full_name')->get();
+    }
+
+    /**
+     * Drop the cached draft and review, so the next render reads what was just written.
+     */
+    private function forget(): void
+    {
+        unset($this->draft, $this->review, $this->matches);
+    }
+}

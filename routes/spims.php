@@ -8,6 +8,7 @@ use App\Livewire\MasterData\Equipment;
 use App\Livewire\MasterData\StorageLocations;
 use App\Livewire\Parts;
 use App\Livewire\Personnel;
+use App\Livewire\Station;
 use App\Livewire\Users;
 use Illuminate\Support\Facades\Route;
 
@@ -53,6 +54,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('imports/create', Imports\Upload::class)->name('imports.create');
     Route::get('imports/template', ImportTemplateController::class)->name('imports.template');
     Route::livewire('imports/{batch}', Imports\Review::class)->whereNumber('batch')->name('imports.show');
+
+    Route::livewire('station/withdrawal', Station\Withdrawal::class)->name('station.withdrawal');
+    Route::livewire('station/receipt/{transaction}', Station\Receipt::class)
+        ->whereNumber('transaction')
+        ->name('station.receipt');
 
     Route::get('media/{path}', MediaController::class)
         ->where('path', '(company|personnel)/[A-Za-z0-9]+\.[A-Za-z0-9]+')

@@ -1,0 +1,235 @@
+<?php
+
+use App\Domain\Identity\PersonnelBadges;
+use App\Domain\Ledger\StockLedger;
+use App\Domain\Withdrawals\WithdrawalIdentification;
+use App\Domain\Withdrawals\WithdrawalService;
+use App\Enums\ReasonCode;
+use App\Enums\Role;
+use App\Enums\TransactionStatus;
+use App\Enums\TransactionType;
+use App\Livewire\Station\Withdrawal;
+use App\Models\Equipment;
+use App\Models\Personnel;
+use App\Models\StockTransaction;
+use App\Models\WithdrawalPurpose;
+use Illuminate\Support\Facades\Hash;
+use Livewire\Livewire;
+
+beforeEach(function () {
+    configureInstall();
+    $this->custodian = userWithRoles(Role::Custodian);
+    $this->supervisor = userWithRoles(Role::Supervisor);
+    $this->supervisor->forceFill(['email' => 'rita@microtech.test', 'password' => Hash::make('counter-secret')])->save();
+    $this->equipment = Equipment::factory()->create(['code' => 'CNC-01']);
+    $this->purpose = WithdrawalPurpose::query()->where('is_active', true)->orderBy('sort_order')->firstOrFail();
+    $this->part = partWithStock('10', ['part_number' => 'BRG-6204', 'description' => 'Deep groove ball bearing']);
+    $this->person = Personnel::factory()->create(['full_name' => 'Rosalie Mendoza', 'employee_no' => 'EMP-0042']);
+    app(PersonnelBadges::class)->enroll($this->person, 'A1234BCDE', $this->custodian);
+});
+
+it('opens the station only for the roles that process withdrawals', function (Role $role, bool $allowed) {
+    $response = $this->actingAs(userWithRoles($role))->get(route('station.withdrawal'));
+
+    $allowed ? $response->assertOk() : $response->assertForbidden();
+})->with(roleMatrix('CS'));
+
+it('adds a spare part entered by its exact number', function () {
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'brg-6204')
+        ->set('quantity', '3')
+        ->call('enterPart')
+        ->assertHasNoErrors()
+        ->assertSee('Deep groove ball bearing');
+
+    expect(app(WithdrawalService::class)->openDraft($this->custodian)->lines()->firstOrFail()->quantity)->toBe('3.000');
+});
+
+it('offers matches when the entry is not a part number', function () {
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'ball bearing')
+        ->call('enterPart')
+        ->assertHasErrors('partEntry')
+        ->assertSee('BRG-6204');
+});
+
+it('walks the whole scan-last flow and lands on the receipt', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->set('quantity', '4')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->call('saveContext')
+        ->set('badge', 'A1234BCDE')
+        ->call('scan')
+        ->assertHasNoErrors()
+        ->assertSee('Rosalie Mendoza')
+        ->call('confirm')
+        ->assertHasNoErrors();
+
+    // Typed, because partWithStock() has already completed an opening transaction for this part.
+    $completed = StockTransaction::query()
+        ->where('type', TransactionType::Withdrawal)
+        ->where('status', TransactionStatus::Completed)
+        ->sole();
+
+    $component->assertRedirect(route('station.receipt', ['transaction' => $completed->id]));
+
+    expect(onHand($this->part))->toBe('6.000')
+        ->and($completed->transaction_no)->toStartWith('WD-');
+});
+
+it('requires a new scan after the cart changes', function () {
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->call('saveContext')
+        ->set('badge', 'A1234BCDE')
+        ->call('scan')
+        ->set('quantity', '2')
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->call('confirm')
+        ->assertHasErrors('draft');
+
+    expect(StockTransaction::query()
+        ->where('type', TransactionType::Withdrawal)
+        ->where('status', TransactionStatus::Completed)
+        ->count())->toBe(0);
+});
+
+it('refuses to confirm once the scan has expired', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->call('saveContext')
+        ->set('badge', 'A1234BCDE')
+        ->call('scan');
+
+    $this->travel(app(WithdrawalIdentification::class)->timeoutSeconds() + 1)->seconds();
+
+    $component->call('confirm')->assertHasErrors('draft');
+});
+
+it('rejects a badge nobody holds without touching the draft', function () {
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('badge', 'FFFF9999')
+        ->call('scan')
+        ->assertHasErrors('badge');
+});
+
+it('lets a supervisor authorise an override at the counter', function () {
+    $short = partWithStock('1', ['part_number' => 'BLT-100']);
+
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BLT-100')
+        ->set('quantity', '5')
+        ->call('enterPart')
+        ->call('requestOverride', $short->id)
+        ->set('verifiedQty', '5')
+        ->set('overrideReason', ReasonCode::FoundStock->value)
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'counter-secret')
+        ->call('authoriseOverride')
+        ->assertHasNoErrors();
+
+    $draft = app(WithdrawalService::class)->openDraft($this->custodian);
+
+    expect($draft->overrides()->count())->toBe(1)
+        ->and($draft->overrides()->firstOrFail()->authorised_by_user_id)->toBe($this->supervisor->id);
+});
+
+it('refuses an override on wrong supervisor credentials and never keeps the password', function () {
+    $short = partWithStock('1', ['part_number' => 'BLT-100']);
+
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BLT-100')
+        ->set('quantity', '5')
+        ->call('enterPart')
+        ->call('requestOverride', $short->id)
+        ->set('verifiedQty', '5')
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'wrong')
+        ->call('authoriseOverride')
+        ->assertHasErrors('supervisorPassword')
+        ->assertSet('supervisorPassword', '');
+
+    expect(app(WithdrawalService::class)->openDraft($this->custodian)->overrides()->count())->toBe(0);
+});
+
+it('lets a supervisor identify a person who has no badge', function () {
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('manualPersonnelId', (string) $this->person->id)
+        ->set('manualReason', 'Badge left at home')
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'counter-secret')
+        ->call('identifyManually')
+        ->assertHasNoErrors()
+        ->assertSee('Rosalie Mendoza');
+});
+
+it('names the spare parts when stock ran out while the custodian was reviewing', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->set('quantity', '9')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->call('saveContext')
+        ->set('badge', 'A1234BCDE')
+        ->call('scan');
+
+    // Another station takes the stock between the scan and the confirmation.
+    $other = StockTransaction::factory()->withLines([[$this->part, '8']])->create();
+    app(StockLedger::class)->complete($other, $this->custodian);
+
+    $component->call('confirm')->assertHasErrors('draft')->assertSee('BRG-6204');
+});
+
+it('cancels a draft and starts a clean one', function () {
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->call('cancelDraft')
+        ->assertHasNoErrors();
+
+    expect(app(WithdrawalService::class)->openDraft($this->custodian)->lines()->count())->toBe(0)
+        ->and(StockTransaction::query()->where('status', TransactionStatus::Cancelled)->count())->toBe(1);
+});
+
+it('shows the transaction record the requirement lists, with the badge masked', function () {
+    $draft = StockTransaction::factory()->withLines([[$this->part, '4']])->create([
+        'custodian_user_id' => $this->custodian->id,
+        'personnel_id' => $this->person->id,
+        'equipment_id' => $this->equipment->id,
+        'purpose_id' => $this->purpose->id,
+    ]);
+    $completed = app(StockLedger::class)->complete($draft, $this->custodian);
+
+    $this->actingAs($this->custodian)
+        ->get(route('station.receipt', ['transaction' => $completed->id]))
+        ->assertOk()
+        ->assertSee($completed->transaction_no)
+        ->assertSee('Rosalie Mendoza')
+        ->assertSee('EMP-0042')
+        ->assertSee('BRG-6204')
+        ->assertSee('Deep groove ball bearing')
+        ->assertSee('CNC-01')
+        ->assertSee($this->person->fresh()->badge_uid_masked)
+        ->assertDontSee('A1234BCDE');
+});
+
+it('keeps the scan field on Enter', function () {
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->assertSeeHtml('wire:keydown.enter.prevent="scan"')
+        ->assertSeeHtml('wire:keydown.enter.prevent="enterPart"');
+});
