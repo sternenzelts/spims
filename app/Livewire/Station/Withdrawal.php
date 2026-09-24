@@ -7,6 +7,7 @@ use App\Domain\Access\Exceptions\AuthorisationRefused;
 use App\Domain\Ledger\Exceptions\InstallNotConfigured;
 use App\Domain\Ledger\Exceptions\InsufficientStock;
 use App\Domain\Ledger\Exceptions\StockBusy;
+use App\Domain\Ledger\Exceptions\StockMovedSinceCount;
 use App\Domain\Ledger\Shortage;
 use App\Domain\Ledger\StockLedger;
 use App\Domain\Parts\PartSearch;
@@ -310,6 +311,11 @@ class Withdrawal extends Component
                     $short->shortages,
                 )),
             ]));
+            $this->forget();
+
+            return;
+        } catch (StockMovedSinceCount $stale) {
+            $this->addError('draft', $stale->getMessage());
             $this->forget();
 
             return;

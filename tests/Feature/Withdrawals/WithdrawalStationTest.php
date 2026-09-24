@@ -164,6 +164,41 @@ it('refuses an override on wrong supervisor credentials and never keeps the pass
     expect(app(WithdrawalService::class)->openDraft($this->custodian)->overrides()->count())->toBe(0);
 });
 
+it('asks for a new count when the part moved after the supervisor counted it', function () {
+    $short = partWithStock('1', ['part_number' => 'BLT-100']);
+    // The count comes after the opening balance; timestamps are stored to the second.
+    $this->travel(1)->seconds();
+
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BLT-100')
+        ->set('quantity', '5')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->call('saveContext')
+        ->call('requestOverride', $short->id)
+        ->set('verifiedQty', '5')
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'counter-secret')
+        ->call('authoriseOverride')
+        ->set('badge', 'A1234BCDE')
+        ->call('scan')
+        ->assertHasNoErrors();
+
+    // Another station records a delivery of the same part before this one confirms.
+    $delivery = StockTransaction::factory()->replenishment()->withLines([[$short, '1']])->create();
+    app(StockLedger::class)->complete($delivery, $this->custodian);
+
+    $component->call('confirm')
+        ->assertHasErrors('draft')
+        ->assertSee('Count the shelf again');
+
+    expect(StockTransaction::query()
+        ->where('type', TransactionType::Withdrawal)
+        ->where('status', TransactionStatus::Completed)
+        ->count())->toBe(0);
+});
+
 it('lets a supervisor identify a person who has no badge', function () {
     Livewire::actingAs($this->custodian)->test(Withdrawal::class)
         ->set('partEntry', 'BRG-6204')

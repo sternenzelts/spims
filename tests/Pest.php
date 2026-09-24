@@ -2,6 +2,7 @@
 
 use App\Domain\Imports\PartImports;
 use App\Domain\Ledger\Exceptions\InsufficientStock;
+use App\Domain\Ledger\Exceptions\StockMovedSinceCount;
 use App\Domain\Ledger\StockLedger;
 use App\Domain\Settings\InstallSettings;
 use App\Enums\Role;
@@ -90,7 +91,8 @@ function onHand(Part $part): ?string
 /**
  * Post drafts from separate PHP processes at the same moment. A second connection holds the stock
  * rows locked until every process is waiting on them, then lets go, so the postings really contend
- * instead of running one after another. Returns 'completed' or 'insufficient' for each draft.
+ * instead of running one after another. Returns 'completed', 'insufficient' or, for an override
+ * whose count went stale while it waited, 'stale', for each draft.
  *
  * Needs the lock_holder connection configured by the calling test.
  *
@@ -126,6 +128,8 @@ function postConcurrently(array $transactionIds, array $lockedPartIds): array
                     return 'completed';
                 } catch (InsufficientStock) {
                     return 'insufficient';
+                } catch (StockMovedSinceCount) {
+                    return 'stale';
                 }
             };
 

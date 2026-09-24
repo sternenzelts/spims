@@ -35,6 +35,10 @@ it('keeps every balance equal to its ledger through random postings and backdate
         );
     }
 
+    // A supervisor's count is refused if stock of its part was recorded moving at or after it, and
+    // timestamps are stored to the second: the first step must not share a second with the openings.
+    $this->travel(1)->minutes();
+
     for ($step = 1; $step <= 120; $step++) {
         $type = [TransactionType::Withdrawal, TransactionType::Replenishment, TransactionType::Adjustment][mt_rand(0, 2)];
         $chosen = $parts;

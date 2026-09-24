@@ -9,6 +9,7 @@ use App\Domain\Ledger\Exceptions\InstallNotConfigured;
 use App\Domain\Ledger\Exceptions\InsufficientStock;
 use App\Domain\Ledger\Exceptions\OpeningBalanceAlreadyRecorded;
 use App\Domain\Ledger\Exceptions\StockBusy;
+use App\Domain\Ledger\Exceptions\StockMovedSinceCount;
 use App\Domain\Ledger\Exceptions\TransactionHasNoLines;
 use App\Domain\Ledger\Exceptions\TransactionNotDraft;
 use App\Domain\Settings\InstallSettings;
@@ -152,6 +153,7 @@ final readonly class StockLedger
      * @throws InstallNotConfigured
      * @throws TransactionNotDraft
      * @throws WithdrawalRefused when the identification is missing or has expired
+     * @throws StockMovedSinceCount when stock of an overridden part moved after its count
      * @throws TransactionHasNoLines
      * @throws InsufficientStock
      * @throws StockBusy
@@ -225,6 +227,8 @@ final readonly class StockLedger
         $discrepancies = [];
         /** @var list<array{0: WithdrawalOverride, 1: BigDecimal}> $adjustments */
         $adjustments = [];
+        /** @var list<string> $stale */
+        $stale = [];
 
         foreach ($withdrawal->overrides()->orderBy('part_id')->get() as $override) {
             $line = $lines->firstWhere('part_id', $override->part_id);
@@ -254,6 +258,21 @@ final readonly class StockLedger
                 continue;
             }
 
+            // The staleness guard of design §5.6.1, applied to the count behind an override. Once
+            // stock of the part is recorded moving after the count, the count no longer describes
+            // the shelf, and adjusting to it could record stock that never existed. No movement of
+            // this posting is written yet, so it cannot see itself. Timestamps are stored to the
+            // second, so a movement in the same second as the authorisation counts as after it: the
+            // count was taken before the authorisation.
+            if (StockMovement::query()
+                ->where('part_id', $override->part_id)
+                ->where('recorded_at', '>=', $override->authorised_at)
+                ->exists()) {
+                $stale[] = $line->part->part_number;
+
+                continue;
+            }
+
             // Computed here, under lock, never from the recorded_on_hand the supervisor saw.
             $increase = BigDecimal::of($override->verified_qty)->minus($onHand);
 
@@ -266,6 +285,10 @@ final readonly class StockLedger
 
             $adjustments[] = [$override, $increase];
             $balances[$override->part_id] = $onHand->plus($increase);
+        }
+
+        if ($stale !== []) {
+            throw new StockMovedSinceCount($stale);
         }
 
         // Each override posts its own single-line adjustment, so two short lines can carry two

@@ -84,7 +84,11 @@ it('gives up with StockBusy and writes nothing while another station holds the s
 });
 
 it('lets an override withdrawal and a plain withdrawal contend for the same part without losing a unit', function () {
+    // The opening balance is recorded a minute before the supervisor counts. Timestamps are stored
+    // to the second, and one recorded in the same second as the count would count as after it.
+    $this->travel(-1)->minutes();
     $part = partWithStock('2');
+    $this->travelBack();
     $supervisor = User::factory()->create();
 
     $override = StockTransaction::factory()->withLines([[$part, '5']])->create();
@@ -99,42 +103,55 @@ it('lets an override withdrawal and a plain withdrawal contend for the same part
 
     $results = postConcurrently([$override->id, $plain->id], [$part->id]);
 
-    // The override withdrawal always posts: whatever the locked balance turns out to be, the
-    // supervisor verified five on the shelf and the adjustment brings the balance up to it. The
-    // plain withdrawal takes the two units only if it gets there first.
-    expect($results[0])->toBe('completed')
+    // Override first: it adjusts to the five counted and takes them, leaving nothing for the plain
+    // withdrawal. Plain first: it takes two units the count had already seen, so the count no longer
+    // describes the shelf and the override is refused. Either way the record ends at zero.
+    expect($results)->toBeIn([['completed', 'insufficient'], ['stale', 'completed']])
         ->and(onHand($part))->toBe('0.000')
+        ->and(StockTransaction::query()->where('type', TransactionType::Adjustment)->count())
+        ->toBe($results[0] === 'completed' ? 1 : 0)
         ->and(app(LedgerVerifier::class)->verify())->toBe([]);
 });
 
-it('posts two override withdrawals on the same part without deadlocking', function () {
-    $part = partWithStock('0');
+it('posts two override withdrawals over the same parts, in opposite line order, without deadlocking', function () {
+    $bearing = partWithStock('0');
+    $belt = partWithStock('0');
     $supervisor = User::factory()->create();
     $drafts = [];
 
-    foreach ([1, 2] as $each) {
-        $draft = StockTransaction::factory()->withLines([[$part, '5']])->create();
-        WithdrawalOverride::factory()->create([
-            'stock_transaction_id' => $draft->id,
-            'part_id' => $part->id,
-            'verified_qty' => '5.000',
-            'recorded_on_hand' => '0.000',
-            'authorised_by_user_id' => $supervisor->id,
-        ]);
+    // One supervisor counts five of each on the shelf, once for each of two stations.
+    foreach ([[$bearing, $belt], [$belt, $bearing]] as [$first, $second]) {
+        $draft = StockTransaction::factory()->withLines([[$first, '5'], [$second, '5']])->create();
+
+        foreach ([$first, $second] as $part) {
+            WithdrawalOverride::factory()->create([
+                'stock_transaction_id' => $draft->id,
+                'part_id' => $part->id,
+                'verified_qty' => '5.000',
+                'recorded_on_hand' => '0.000',
+                'authorised_by_user_id' => $supervisor->id,
+            ]);
+        }
+
         $drafts[] = $draft->id;
     }
 
     $deadlocks = 'select deadlocks from pg_stat_database where datname = current_database()';
     $deadlocksBefore = DB::scalar($deadlocks);
 
-    $results = postConcurrently($drafts, [$part->id]);
+    $results = postConcurrently($drafts, [$bearing->id, $belt->id]);
 
+    // Laravel retries a transaction that hits a deadlock, so a deadlock would not fail the postings.
+    // Postgres counts it anyway. Its statistics arrive a moment after the posting processes exit.
     usleep(1_500_000);
     DB::statement('select pg_stat_clear_snapshot()');
 
-    expect($results)->toBe(['completed', 'completed'])
+    // The first posting adjusts both parts to the count and takes them. The second finds stock
+    // recorded moving since its count and is refused, instead of adjusting to the same five again.
+    expect($results)->toEqualCanonicalizing(['completed', 'stale'])
         ->and(DB::scalar($deadlocks))->toBe($deadlocksBefore)
-        ->and(onHand($part))->toBe('0.000')
+        ->and(onHand($bearing))->toBe('0.000')
+        ->and(onHand($belt))->toBe('0.000')
         ->and(StockTransaction::query()->where('type', TransactionType::Adjustment)->count())->toBe(2)
         ->and(app(LedgerVerifier::class)->verify())->toBe([]);
 });

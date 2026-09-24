@@ -2,6 +2,7 @@
 
 use App\Domain\Ledger\Events\StockDiscrepancyReported;
 use App\Domain\Ledger\Exceptions\InsufficientStock;
+use App\Domain\Ledger\Exceptions\StockMovedSinceCount;
 use App\Domain\Ledger\LedgerVerifier;
 use App\Domain\Ledger\StockLedger;
 use App\Domain\Withdrawals\Exceptions\WithdrawalRefused;
@@ -27,9 +28,15 @@ beforeEach(function () {
 
 /**
  * A pending override on a draft, as WithdrawalService::authoriseOverride() leaves it.
+ *
+ * The supervisor counts after the stock the test set up was recorded. Timestamps are stored to the
+ * second, and a movement recorded in the same second as the authorisation counts as after it, so
+ * the clock moves on a second first. Anything the test records afterwards is after the count.
  */
 function authorise(StockTransaction $draft, Part $part, string $verified, string $recorded, ReasonCode $reason = ReasonCode::FoundStock): WithdrawalOverride
 {
+    test()->travel(1)->seconds();
+
     return WithdrawalOverride::factory()->create([
         'stock_transaction_id' => $draft->id,
         'part_id' => $part->id,
@@ -87,18 +94,65 @@ it('numbers the adjustment before the withdrawal', function () {
 it('computes the adjustment from the locked balance, not the one the supervisor saw', function () {
     $part = partWithStock('3');
     $draft = StockTransaction::factory()->withLines([[$part, '5']])->create(['custodian_user_id' => $this->custodian->id]);
-    $override = authorise($draft, $part, '8', '3');
-
-    // A replenishment of 1 commits between the authorisation and the confirmation.
-    $delivery = StockTransaction::factory()->replenishment()->withLines([[$part, '1']])->create();
-    $this->ledger->complete($delivery, $this->custodian);
+    // recorded_on_hand is only what the screen showed the supervisor, so it is never trusted.
+    $override = authorise($draft, $part, '8', '1');
 
     $this->ledger->completeWithOverrides($draft, $this->custodian);
 
-    // The shelf holds 8, the system now holds 4, so the adjustment is 4 — not the 5 that
+    // The shelf holds 8 and the locked balance is 3, so the adjustment is 5 — not the 7 that
     // 8 - recorded_on_hand would have given.
-    expect($override->fresh()->adjustment->lines()->firstOrFail()->quantity)->toBe('4.000')
+    expect($override->fresh()->adjustment->lines()->firstOrFail()->quantity)->toBe('5.000')
         ->and(onHand($part))->toBe('3.000')
+        ->and(app(LedgerVerifier::class)->verify())->toBe([]);
+});
+
+it('refuses an override whose part moved after the supervisor counted it', function (Closure $move, string $left) {
+    $part = partWithStock('3', ['part_number' => 'BRG-6204']);
+    $draft = StockTransaction::factory()->withLines([[$part, '5']])->create(['custodian_user_id' => $this->custodian->id]);
+    $override = authorise($draft, $part, '8', '3');
+
+    // Recorded after the count, so the count of 8 no longer describes the shelf.
+    $move($part);
+
+    expect(fn () => $this->ledger->completeWithOverrides($draft, $this->custodian))
+        ->toThrow(StockMovedSinceCount::class, 'Stock of BRG-6204 moved since the supervisor counted it');
+
+    expect($draft->fresh()->status)->toBe(TransactionStatus::Draft)
+        ->and($override->fresh()->isPending())->toBeTrue()
+        ->and(StockTransaction::query()->where('type', TransactionType::Adjustment)->count())->toBe(0)
+        ->and(onHand($part))->toBe($left)
+        ->and(app(LedgerVerifier::class)->verify())->toBe([]);
+})->with([
+    // A delivery the shelf count may or may not have included: adjusting to 8 against 4 could lose
+    // the delivery from the record.
+    'a delivery that leaves the line short' => [
+        fn (Part $part) => test()->ledger->complete(StockTransaction::factory()->replenishment()->withLines([[$part, '1']])->create(), test()->custodian),
+        '4.000',
+    ],
+    // A withdrawal the count had already seen: adjusting to 8 against 1 would record 2 that are not
+    // on the shelf.
+    'another withdrawal' => [
+        fn (Part $part) => test()->ledger->complete(StockTransaction::factory()->withLines([[$part, '2']])->create(), test()->custodian),
+        '1.000',
+    ],
+]);
+
+it('refuses the second of two overrides counted on one shelf, instead of adjusting to it twice', function () {
+    $part = partWithStock('0', ['part_number' => 'BLT-100']);
+    $first = StockTransaction::factory()->withLines([[$part, '5']])->create(['custodian_user_id' => $this->custodian->id]);
+    $second = StockTransaction::factory()->withLines([[$part, '5']])->create(['custodian_user_id' => $this->custodian->id]);
+    // One supervisor counts five on the shelf, once for each of two stations.
+    authorise($first, $part, '5', '0');
+    authorise($second, $part, '5', '0');
+
+    $this->ledger->completeWithOverrides($first, $this->custodian);
+
+    expect(fn () => $this->ledger->completeWithOverrides($second, $this->custodian))
+        ->toThrow(StockMovedSinceCount::class, 'BLT-100');
+
+    expect(StockTransaction::query()->where('type', TransactionType::Adjustment)->count())->toBe(1)
+        ->and(onHand($part))->toBe('0.000')
+        ->and($second->fresh()->status)->toBe(TransactionStatus::Draft)
         ->and(app(LedgerVerifier::class)->verify())->toBe([]);
 });
 
@@ -107,6 +161,8 @@ it('discards the override when the locked balance already covers the line', func
     $draft = StockTransaction::factory()->withLines([[$part, '5']])->create(['custodian_user_id' => $this->custodian->id]);
     $override = authorise($draft, $part, '8', '3');
 
+    // Recorded after the count, but a covered line discards its override before the count's age
+    // is checked: the withdrawal needs no adjustment at all.
     $delivery = StockTransaction::factory()->replenishment()->withLines([[$part, '10']])->create();
     $this->ledger->complete($delivery, $this->custodian);
 
@@ -119,14 +175,16 @@ it('discards the override when the locked balance already covers the line', func
         ->and(AuditLog::query()->where('event', 'override_discarded')->count())->toBe(1);
 });
 
-it('reports a discrepancy whether the override was posted or discarded', function (string $delivered, bool $expectedAdjusted) {
+it('reports a discrepancy whether the override was posted or discarded', function (?string $delivered, bool $expectedAdjusted) {
     Event::fake([StockDiscrepancyReported::class]);
     $part = partWithStock('3');
     $draft = StockTransaction::factory()->withLines([[$part, '5']])->create(['custodian_user_id' => $this->custodian->id]);
     $override = authorise($draft, $part, '8', '3');
 
-    $delivery = StockTransaction::factory()->replenishment()->withLines([[$part, $delivered]])->create();
-    $this->ledger->complete($delivery, $this->custodian);
+    if ($delivered !== null) {
+        $delivery = StockTransaction::factory()->replenishment()->withLines([[$part, $delivered]])->create();
+        $this->ledger->complete($delivery, $this->custodian);
+    }
 
     $this->ledger->completeWithOverrides($draft, $this->custodian);
 
@@ -135,7 +193,7 @@ it('reports a discrepancy whether the override was posted or discarded', functio
         && $event->withdrawalTransactionId === $draft->id
         && $event->wasAdjusted === $expectedAdjusted);
 })->with([
-    'posted' => ['1', true],
+    'posted' => [null, true],
     'discarded' => ['10', false],
 ]);
 
