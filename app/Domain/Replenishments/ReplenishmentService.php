@@ -15,6 +15,8 @@ use App\Models\User;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
 use Carbon\CarbonImmutable;
+use Closure;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
@@ -67,8 +69,6 @@ final readonly class ReplenishmentService
      */
     public function setDelivery(StockTransaction $draft, string $supplier, string $referenceNo, string $receivedOn): void
     {
-        $this->guardDraft($draft);
-
         $supplier = trim($supplier);
         $referenceNo = Str::upper(trim($referenceNo));
 
@@ -92,7 +92,9 @@ final readonly class ReplenishmentService
             throw ReplenishmentRefused::receivedEarlier();
         }
 
-        $draft->forceFill(['supplier' => $supplier, 'reference_no' => $referenceNo])->save();
+        $this->change($draft, function (StockTransaction $draft) use ($supplier, $referenceNo): void {
+            $draft->forceFill(['supplier' => $supplier, 'reference_no' => $referenceNo])->save();
+        });
     }
 
     /**
@@ -100,33 +102,34 @@ final readonly class ReplenishmentService
      */
     public function addLine(StockTransaction $draft, Part $part, string $quantity, ?string $unitCost): StockTransactionLine
     {
-        $this->guardDraft($draft);
-        $amount = $this->quantity($quantity);
-        $cost = $this->unitCost($unitCost);
+        return $this->change($draft, function (StockTransaction $draft) use ($part, $quantity, $unitCost): StockTransactionLine {
+            $amount = $this->quantity($quantity);
+            $cost = $this->unitCost($unitCost);
 
-        if (! $part->is_active) {
-            throw ReplenishmentRefused::inactivePart($part);
-        }
+            if (! $part->is_active) {
+                throw ReplenishmentRefused::inactivePart($part);
+            }
 
-        $line = $draft->lines()->where('part_id', $part->id)->first();
+            $line = $draft->lines()->where('part_id', $part->id)->first();
 
-        if ($line instanceof StockTransactionLine) {
-            $line->forceFill([
-                'quantity' => (string) BigDecimal::of($line->quantity)->plus($amount),
-                'unit_cost' => $cost ?? $line->unit_cost,
-            ])->save();
+            if ($line instanceof StockTransactionLine) {
+                $line->forceFill([
+                    'quantity' => (string) BigDecimal::of($line->quantity)->plus($amount),
+                    'unit_cost' => $cost ?? $line->unit_cost,
+                ])->save();
 
-            return $line;
-        }
+                return $line;
+            }
 
-        return $draft->lines()->create([
-            'line_no' => ((int) $draft->lines()->max('line_no')) + 1,
-            'part_id' => $part->id,
-            'quantity' => (string) $amount,
-            // A replenishment always adds stock (TransactionType::Replenishment->direction()).
-            'direction' => 1,
-            'unit_cost' => $cost,
-        ]);
+            return $draft->lines()->create([
+                'line_no' => ((int) $draft->lines()->max('line_no')) + 1,
+                'part_id' => $part->id,
+                'quantity' => (string) $amount,
+                // A replenishment always adds stock (TransactionType::Replenishment->direction()).
+                'direction' => 1,
+                'unit_cost' => $cost,
+            ]);
+        });
     }
 
     /**
@@ -134,13 +137,12 @@ final readonly class ReplenishmentService
      */
     public function setLineQuantity(StockTransaction $draft, StockTransactionLine $line, string $quantity, ?string $unitCost): void
     {
-        $this->guardDraft($draft);
-        $this->guardLineOnDraft($draft, $line);
-
-        $line->forceFill([
-            'quantity' => (string) $this->quantity($quantity),
-            'unit_cost' => $this->unitCost($unitCost),
-        ])->save();
+        $this->change($draft, function (StockTransaction $draft) use ($line, $quantity, $unitCost): void {
+            $this->lineOf($draft, $line)->forceFill([
+                'quantity' => (string) $this->quantity($quantity),
+                'unit_cost' => $this->unitCost($unitCost),
+            ])->save();
+        });
     }
 
     /**
@@ -148,10 +150,9 @@ final readonly class ReplenishmentService
      */
     public function removeLine(StockTransaction $draft, StockTransactionLine $line): void
     {
-        $this->guardDraft($draft);
-        $this->guardLineOnDraft($draft, $line);
-
-        $line->delete();
+        $this->change($draft, function (StockTransaction $draft) use ($line): void {
+            $this->lineOf($draft, $line)->delete();
+        });
     }
 
     /**
@@ -159,17 +160,17 @@ final readonly class ReplenishmentService
      */
     public function cancel(StockTransaction $draft, User $actor): void
     {
-        $this->guardDraft($draft);
+        $this->change($draft, function (StockTransaction $draft) use ($actor): void {
+            $draft->forceFill(['status' => TransactionStatus::Cancelled])->save();
 
-        $draft->forceFill(['status' => TransactionStatus::Cancelled])->save();
-
-        $this->audit->record(
-            'cancelled',
-            $draft,
-            ['status' => TransactionStatus::Draft->value],
-            ['status' => TransactionStatus::Cancelled->value],
-            $actor,
-        );
+            $this->audit->record(
+                'cancelled',
+                $draft,
+                ['status' => TransactionStatus::Draft->value],
+                ['status' => TransactionStatus::Cancelled->value],
+                $actor,
+            );
+        });
     }
 
     /**
@@ -292,12 +293,42 @@ final readonly class ReplenishmentService
     }
 
     /**
+     * Apply a change to a draft under its row lock, as WithdrawalService does: the status that
+     * decides is the one on the locked row, so a change from a second tab either lands before
+     * StockLedger posts the draft or finds it no longer a Draft.
+     *
+     * @template TResult
+     *
+     * @param  Closure(StockTransaction): TResult  $change  given the locked copy of the draft
+     * @return TResult
+     *
      * @throws ReplenishmentRefused
      */
-    private function guardLineOnDraft(StockTransaction $draft, StockTransactionLine $line): void
+    private function change(StockTransaction $draft, Closure $change): mixed
     {
-        if ($line->stock_transaction_id !== $draft->id) {
-            throw ReplenishmentRefused::lineNotOnDraft();
-        }
+        return DB::transaction(function () use ($draft, $change): mixed {
+            $locked = StockTransaction::query()->whereKey($draft->id)->lockForUpdate()->firstOrFail();
+
+            if ($locked->status !== TransactionStatus::Draft) {
+                throw ReplenishmentRefused::notADraft($locked);
+            }
+
+            $result = $change($locked);
+
+            // The caller's copy reads what was written.
+            $draft->setRawAttributes($locked->getAttributes(), true)->unsetRelations();
+
+            return $result;
+        });
+    }
+
+    /**
+     * The line as it is now, read under the draft's lock.
+     *
+     * @throws ReplenishmentRefused
+     */
+    private function lineOf(StockTransaction $draft, StockTransactionLine $line): StockTransactionLine
+    {
+        return $draft->lines()->whereKey($line->id)->first() ?? throw ReplenishmentRefused::lineNotOnDraft();
     }
 }

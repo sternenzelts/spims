@@ -12,6 +12,8 @@ use App\Domain\Ledger\Exceptions\StockBusy;
 use App\Domain\Ledger\Exceptions\TransactionHasNoLines;
 use App\Domain\Ledger\Exceptions\TransactionNotDraft;
 use App\Domain\Settings\InstallSettings;
+use App\Domain\Withdrawals\Exceptions\WithdrawalRefused;
+use App\Domain\Withdrawals\WithdrawalIdentification;
 use App\Enums\MovementType;
 use App\Enums\TransactionStatus;
 use App\Enums\TransactionType;
@@ -43,6 +45,7 @@ final readonly class StockLedger
         private InstallSettings $settings,
         private TransactionNumberer $numberer,
         private AuditLogger $audit,
+        private WithdrawalIdentification $identification,
     ) {}
 
     /**
@@ -148,6 +151,7 @@ final readonly class StockLedger
      *
      * @throws InstallNotConfigured
      * @throws TransactionNotDraft
+     * @throws WithdrawalRefused when the identification is missing or has expired
      * @throws TransactionHasNoLines
      * @throws InsufficientStock
      * @throws StockBusy
@@ -198,6 +202,10 @@ final readonly class StockLedger
         if ($withdrawal->status !== TransactionStatus::Draft) {
             throw new TransactionNotDraft($withdrawal);
         }
+
+        // Checked again on the locked row, before any stock is locked: another tab can clear the
+        // identification, or its time limit can pass, after the station's own check.
+        $this->identification->guardCurrent($withdrawal);
 
         $lines = $withdrawal->lines()->with('part')->orderBy('line_no')->get();
 

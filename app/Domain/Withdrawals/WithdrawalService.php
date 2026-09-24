@@ -20,6 +20,8 @@ use App\Models\WithdrawalPurpose;
 use Brick\Math\BigDecimal;
 use Brick\Math\Exception\MathException;
 use Carbon\CarbonImmutable;
+use Closure;
+use Illuminate\Support\Facades\DB;
 
 /**
  * A draft withdrawal and everything that can be done to it before the badge scan
@@ -72,30 +74,31 @@ final readonly class WithdrawalService
      */
     public function addLine(StockTransaction $draft, Part $part, string $quantity): StockTransactionLine
     {
-        $this->guardDraft($draft);
-        $amount = $this->quantity($quantity);
+        return $this->change($draft, function (StockTransaction $draft) use ($part, $quantity): StockTransactionLine {
+            $amount = $this->quantity($quantity);
 
-        if (! $part->is_active) {
-            throw WithdrawalRefused::inactivePart($part);
-        }
+            if (! $part->is_active) {
+                throw WithdrawalRefused::inactivePart($part);
+            }
 
-        $line = $draft->lines()->where('part_id', $part->id)->first();
+            $line = $draft->lines()->where('part_id', $part->id)->first();
 
-        if ($line instanceof StockTransactionLine) {
-            $line->forceFill(['quantity' => (string) BigDecimal::of($line->quantity)->plus($amount)])->save();
-        } else {
-            $line = $draft->lines()->create([
-                'line_no' => ((int) $draft->lines()->max('line_no')) + 1,
-                'part_id' => $part->id,
-                'quantity' => (string) $amount,
-                // A withdrawal always removes stock (TransactionType::Withdrawal->direction()).
-                'direction' => -1,
-            ]);
-        }
+            if ($line instanceof StockTransactionLine) {
+                $line->forceFill(['quantity' => (string) BigDecimal::of($line->quantity)->plus($amount)])->save();
+            } else {
+                $line = $draft->lines()->create([
+                    'line_no' => ((int) $draft->lines()->max('line_no')) + 1,
+                    'part_id' => $part->id,
+                    'quantity' => (string) $amount,
+                    // A withdrawal always removes stock (TransactionType::Withdrawal->direction()).
+                    'direction' => -1,
+                ]);
+            }
 
-        $this->invalidate($draft);
+            $this->invalidate($draft);
 
-        return $line;
+            return $line;
+        });
     }
 
     /**
@@ -103,12 +106,11 @@ final readonly class WithdrawalService
      */
     public function setLineQuantity(StockTransaction $draft, StockTransactionLine $line, string $quantity): void
     {
-        $this->guardDraft($draft);
-        $this->guardLineOnDraft($draft, $line);
+        $this->change($draft, function (StockTransaction $draft) use ($line, $quantity): void {
+            $this->lineOf($draft, $line)->forceFill(['quantity' => (string) $this->quantity($quantity)])->save();
 
-        $line->forceFill(['quantity' => (string) $this->quantity($quantity)])->save();
-
-        $this->invalidate($draft);
+            $this->invalidate($draft);
+        });
     }
 
     /**
@@ -116,12 +118,11 @@ final readonly class WithdrawalService
      */
     public function removeLine(StockTransaction $draft, StockTransactionLine $line): void
     {
-        $this->guardDraft($draft);
-        $this->guardLineOnDraft($draft, $line);
+        $this->change($draft, function (StockTransaction $draft) use ($line): void {
+            $this->lineOf($draft, $line)->delete();
 
-        $line->delete();
-
-        $this->invalidate($draft);
+            $this->invalidate($draft);
+        });
     }
 
     /**
@@ -136,18 +137,19 @@ final readonly class WithdrawalService
         ?WithdrawalPurpose $purpose,
         ?string $remarks,
     ): void {
-        $this->guardDraft($draft);
-        $this->guardActiveContext($equipment, $purpose);
+        $this->change($draft, function (StockTransaction $draft) use ($equipment, $purpose, $remarks): void {
+            $this->guardActiveContext($equipment, $purpose);
 
-        $remarks = $remarks === null || trim($remarks) === '' ? null : trim($remarks);
+            $remarks = $remarks === null || trim($remarks) === '' ? null : trim($remarks);
 
-        $draft->forceFill([
-            'equipment_id' => $equipment?->id,
-            'purpose_id' => $purpose?->id,
-            'remarks' => $remarks,
-        ])->save();
+            $draft->forceFill([
+                'equipment_id' => $equipment?->id,
+                'purpose_id' => $purpose?->id,
+                'remarks' => $remarks,
+            ])->save();
 
-        $this->invalidate($draft);
+            $this->invalidate($draft);
+        });
     }
 
     /**
@@ -162,13 +164,14 @@ final readonly class WithdrawalService
         ?Equipment $equipment,
         ?WithdrawalPurpose $purpose,
     ): void {
-        $this->guardDraft($draft);
-        $this->guardLineOnDraft($draft, $line);
-        $this->guardActiveContext($equipment, $purpose);
+        $this->change($draft, function (StockTransaction $draft) use ($line, $equipment, $purpose): void {
+            $line = $this->lineOf($draft, $line);
+            $this->guardActiveContext($equipment, $purpose);
 
-        $line->forceFill(['equipment_id' => $equipment?->id, 'purpose_id' => $purpose?->id])->save();
+            $line->forceFill(['equipment_id' => $equipment?->id, 'purpose_id' => $purpose?->id])->save();
 
-        $this->invalidate($draft);
+            $this->invalidate($draft);
+        });
     }
 
     /**
@@ -179,23 +182,23 @@ final readonly class WithdrawalService
      */
     public function cancel(StockTransaction $draft, User $actor): void
     {
-        $this->guardDraft($draft);
+        $this->change($draft, function (StockTransaction $draft) use ($actor): void {
+            $draft->forceFill(['status' => TransactionStatus::Cancelled])->save();
 
-        $draft->forceFill(['status' => TransactionStatus::Cancelled])->save();
-
-        $this->audit->record(
-            'cancelled',
-            $draft,
-            ['status' => TransactionStatus::Draft->value],
-            ['status' => TransactionStatus::Cancelled->value],
-            $actor,
-        );
+            $this->audit->record(
+                'cancelled',
+                $draft,
+                ['status' => TransactionStatus::Draft->value],
+                ['status' => TransactionStatus::Cancelled->value],
+                $actor,
+            );
+        });
     }
 
     /**
      * PRD FR-SPIMS-008 steps 1 to 5: a supervisor has counted the shelf and authorises issuing more
      * of a part than the recorded balance holds. The authorisation is attached to the Draft and no
-     * lock is taken — a human step cannot be performed while holding row locks (design §5.3).
+     * stock lock is taken — a human step cannot be performed while holding row locks (design §5.3).
      * The adjustment it will post is computed under lock at commit, in
      * StockLedger::completeWithOverrides(), never from recorded_on_hand here.
      *
@@ -208,56 +211,56 @@ final readonly class WithdrawalService
         ReasonCode $reason,
         User $supervisor,
     ): WithdrawalOverride {
-        $this->guardDraft($draft);
+        return $this->change($draft, function (StockTransaction $draft) use ($part, $verifiedQty, $reason, $supervisor): WithdrawalOverride {
+            if (! $supervisor->can(Permission::OverridesAuthorise)) {
+                throw WithdrawalRefused::notAllowedToOverride($supervisor);
+            }
 
-        if (! $supervisor->can(Permission::OverridesAuthorise)) {
-            throw WithdrawalRefused::notAllowedToOverride($supervisor);
-        }
+            if (! in_array($reason, WithdrawalOverride::REASONS, true)) {
+                throw WithdrawalRefused::invalidOverrideReason();
+            }
 
-        if (! in_array($reason, WithdrawalOverride::REASONS, true)) {
-            throw WithdrawalRefused::invalidOverrideReason();
-        }
+            $line = $draft->lines()->where('part_id', $part->id)->first();
 
-        $line = $draft->lines()->where('part_id', $part->id)->first();
+            if (! $line instanceof StockTransactionLine) {
+                throw WithdrawalRefused::partNotOnDraft($part);
+            }
 
-        if (! $line instanceof StockTransactionLine) {
-            throw WithdrawalRefused::partNotOnDraft($part);
-        }
+            $verified = $this->quantity($verifiedQty);
+            $quantity = BigDecimal::of($line->quantity);
 
-        $verified = $this->quantity($verifiedQty);
-        $quantity = BigDecimal::of($line->quantity);
+            if ($verified->isLessThan($quantity)) {
+                throw WithdrawalRefused::verifiedQuantityTooLow($part, (string) $quantity->toScale(3));
+            }
 
-        if ($verified->isLessThan($quantity)) {
-            throw WithdrawalRefused::verifiedQuantityTooLow($part, (string) $quantity->toScale(3));
-        }
+            $stock = PartStock::query()->find($part->id);
+            $onHand = BigDecimal::of($stock instanceof PartStock ? $stock->on_hand : '0');
 
-        $stock = PartStock::query()->find($part->id);
-        $onHand = BigDecimal::of($stock instanceof PartStock ? $stock->on_hand : '0');
+            if (! $onHand->isLessThan($quantity)) {
+                throw WithdrawalRefused::overrideNotNeeded($part);
+            }
 
-        if (! $onHand->isLessThan($quantity)) {
-            throw WithdrawalRefused::overrideNotNeeded($part);
-        }
+            $override = $draft->overrides()->updateOrCreate(['part_id' => $part->id], [
+                'verified_qty' => (string) $verified,
+                'recorded_on_hand' => (string) $onHand->toScale(3),
+                'reason_code' => $reason,
+                'authorised_by_user_id' => $supervisor->id,
+                'authorised_at' => CarbonImmutable::now(),
+            ]);
 
-        $override = $draft->overrides()->updateOrCreate(['part_id' => $part->id], [
-            'verified_qty' => (string) $verified,
-            'recorded_on_hand' => (string) $onHand->toScale(3),
-            'reason_code' => $reason,
-            'authorised_by_user_id' => $supervisor->id,
-            'authorised_at' => CarbonImmutable::now(),
-        ]);
+            $this->audit->record('override_authorised', $override, null, [
+                'part_id' => $part->id,
+                'reason_code' => $reason->value,
+                'verified_qty' => (string) $verified,
+                'recorded_on_hand' => (string) $onHand->toScale(3),
+            ], $supervisor);
 
-        $this->audit->record('override_authorised', $override, null, [
-            'part_id' => $part->id,
-            'reason_code' => $reason->value,
-            'verified_qty' => (string) $verified,
-            'recorded_on_hand' => (string) $onHand->toScale(3),
-        ], $supervisor);
+            // The cart's stock story changed, so any scan taken before this one is no longer the
+            // last step. The override itself survives: its line is within the quantity just verified.
+            $this->invalidate($draft);
 
-        // The cart's stock story changed, so any scan taken before this one is no longer the last
-        // step. The override itself survives: its line is within the quantity just verified.
-        $this->invalidate($draft);
-
-        return $override;
+            return $override;
+        });
     }
 
     /**
@@ -288,13 +291,7 @@ final readonly class WithdrawalService
             throw WithdrawalRefused::remarksRequired($purpose);
         }
 
-        if ($draft->personnel_id === null || $draft->identification_method === null) {
-            throw WithdrawalRefused::notIdentified();
-        }
-
-        if (! $this->identification->isCurrent($draft)) {
-            throw WithdrawalRefused::identificationExpired($this->identification->timeoutSeconds());
-        }
+        $this->identification->guardCurrent($draft);
     }
 
     /**
@@ -361,7 +358,8 @@ final readonly class WithdrawalService
      * The one method every mutator above calls. It prunes the overrides its lines no longer justify
      * and clears the identification through WithdrawalIdentification, which is the only place that
      * clearing happens. This is what makes the badge scan the last step (FR-SPIMS-007) and stops an
-     * authorisation outliving the quantity it was given for (FR-SPIMS-008).
+     * authorisation outliving the quantity it was given for (FR-SPIMS-008). Every caller holds the
+     * draft's row lock, taken by change().
      */
     public function invalidate(StockTransaction $draft): void
     {
@@ -416,13 +414,45 @@ final readonly class WithdrawalService
     }
 
     /**
+     * Apply a change to a draft under its row lock. Decision 5 lets a second tab resume the same
+     * draft, so the copy a request holds may be out of date: the status that decides is the one on
+     * the locked row, and the change works on that locked copy. StockLedger takes the same lock to
+     * post, so a change either lands before the posting starts or finds the draft no longer a Draft.
+     *
+     * @template TResult
+     *
+     * @param  Closure(StockTransaction): TResult  $change  given the locked copy of the draft
+     * @return TResult
+     *
      * @throws WithdrawalRefused
      */
-    private function guardLineOnDraft(StockTransaction $draft, StockTransactionLine $line): void
+    private function change(StockTransaction $draft, Closure $change): mixed
     {
-        if ($line->stock_transaction_id !== $draft->id) {
-            throw WithdrawalRefused::lineNotOnDraft();
-        }
+        return DB::transaction(function () use ($draft, $change): mixed {
+            $locked = StockTransaction::query()->whereKey($draft->id)->lockForUpdate()->firstOrFail();
+
+            if ($locked->status !== TransactionStatus::Draft) {
+                throw WithdrawalRefused::notADraft($locked);
+            }
+
+            $result = $change($locked);
+
+            // The caller's copy reads what was written.
+            $draft->setRawAttributes($locked->getAttributes(), true)->unsetRelations();
+
+            return $result;
+        });
+    }
+
+    /**
+     * The line as it is now, read under the draft's lock. A copy loaded earlier may be out of date,
+     * and Eloquent writes only the attributes it believes have changed.
+     *
+     * @throws WithdrawalRefused
+     */
+    private function lineOf(StockTransaction $draft, StockTransactionLine $line): StockTransactionLine
+    {
+        return $draft->lines()->whereKey($line->id)->first() ?? throw WithdrawalRefused::lineNotOnDraft();
     }
 
     /**

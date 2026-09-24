@@ -155,6 +155,34 @@ it('refuses to confirm until the delivery and at least one line are there', func
     expect(fn () => $this->service->guardReadyToConfirm($draft->fresh()))->not->toThrow(ReplenishmentRefused::class);
 });
 
+it('refuses every change to a replenishment another request has completed', function (Closure $change) {
+    $part = Part::factory()->create();
+    $draft = $this->service->openDraft($this->custodian);
+    $this->service->setDelivery($draft, 'Pacific Bearings Inc.', 'DR-1', $this->today);
+    $line = $this->service->addLine($draft, $part, '5', '10');
+
+    // The second tab's copy, taken while the draft was still a Draft.
+    $stale = $draft->fresh();
+    app(StockLedger::class)->complete($draft->fresh(), $this->custodian);
+
+    expect(fn () => $change($this->service, $stale, $line))->toThrow(ReplenishmentRefused::class, 'completed');
+
+    $completed = $draft->fresh();
+
+    expect($completed->status)->toBe(TransactionStatus::Completed)
+        ->and($completed->supplier)->toBe('Pacific Bearings Inc.')
+        ->and($completed->reference_no)->toBe('DR-1')
+        ->and($completed->lines()->count())->toBe(1)
+        ->and($completed->lines()->sole()->quantity)->toBe('5.000')
+        ->and($completed->lines()->sole()->unit_cost)->toBe('10.0000');
+})->with([
+    'setting the delivery' => [fn (ReplenishmentService $s, $d) => $s->setDelivery($d, 'Luzon Belting Corp.', 'DR-2', test()->today)],
+    'adding a part' => [fn (ReplenishmentService $s, $d) => $s->addLine($d, Part::factory()->create(), '1', null)],
+    'changing a quantity' => [fn (ReplenishmentService $s, $d, $line) => $s->setLineQuantity($d, $line, '9', '12')],
+    'removing a line' => [fn (ReplenishmentService $s, $d, $line) => $s->removeLine($d, $line)],
+    'cancelling' => [fn (ReplenishmentService $s, $d) => $s->cancel($d, test()->custodian)],
+]);
+
 it('cancels a draft and audits it', function () {
     $draft = $this->service->openDraft($this->custodian);
 

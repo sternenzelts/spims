@@ -16,6 +16,7 @@ use App\Models\Personnel;
 use App\Models\StockTransaction;
 use App\Models\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
 use UnexpectedValueException;
 
@@ -74,13 +75,14 @@ final readonly class WithdrawalIdentification
             throw WithdrawalRefused::badgeNotRecognised();
         }
 
-        $draft->forceFill([
+        // Only the write is locked: a rejected scan above is audited even though it throws.
+        DB::transaction(fn () => $this->attach($draft, [
             'personnel_id' => $personnel->id,
             'identification_method' => IdentificationMethod::BadgeScan,
             'identification_authorised_by_user_id' => null,
             'identification_reason' => null,
             'identified_at' => CarbonImmutable::now(),
-        ])->save();
+        ]));
 
         return $personnel;
     }
@@ -117,39 +119,72 @@ final readonly class WithdrawalIdentification
             throw WithdrawalRefused::inactivePersonnel($personnel);
         }
 
-        $draft->forceFill([
-            'personnel_id' => $personnel->id,
-            'identification_method' => IdentificationMethod::SupervisorManual,
-            'identification_authorised_by_user_id' => $supervisor->id,
-            'identification_reason' => $reason,
-            'identified_at' => CarbonImmutable::now(),
-        ])->save();
+        DB::transaction(function () use ($draft, $personnel, $supervisor, $reason): void {
+            $this->attach($draft, [
+                'personnel_id' => $personnel->id,
+                'identification_method' => IdentificationMethod::SupervisorManual,
+                'identification_authorised_by_user_id' => $supervisor->id,
+                'identification_reason' => $reason,
+                'identified_at' => CarbonImmutable::now(),
+            ]);
 
-        $this->audit->record('identified_manually', $draft, null, [
-            'reason' => $reason,
-            'personnel_id' => $personnel->id,
-            'identification_method' => IdentificationMethod::SupervisorManual->value,
-        ], $supervisor);
+            $this->audit->record('identified_manually', $draft, null, [
+                'reason' => $reason,
+                'personnel_id' => $personnel->id,
+                'identification_method' => IdentificationMethod::SupervisorManual->value,
+            ], $supervisor);
+        });
     }
 
     /**
      * The single place a draft's identification is cleared. Reached from
      * WithdrawalService::invalidate() whenever the draft changes, and directly when the person at
      * the counter is not the one on screen (FR-SPIMS-007 alternate flow).
+     *
+     * @throws WithdrawalRefused when the draft is no longer a Draft
      */
     public function clear(StockTransaction $draft): void
     {
-        if ($draft->identified_at === null && $draft->personnel_id === null) {
-            return;
-        }
-
-        $draft->forceFill([
+        $cleared = [
             'identified_at' => null,
             'personnel_id' => null,
             'identification_method' => null,
             'identification_authorised_by_user_id' => null,
             'identification_reason' => null,
-        ])->save();
+        ];
+
+        // Written by key, never decided from the model: a copy loaded before another tab's scan
+        // reads as unidentified, and Eloquent would write nothing. A completed withdrawal keeps the
+        // person it was issued to, so only a Draft row is cleared.
+        $updated = StockTransaction::query()
+            ->whereKey($draft->id)
+            ->where('status', TransactionStatus::Draft)
+            ->update($cleared);
+
+        if ($updated === 0) {
+            throw WithdrawalRefused::notADraft(StockTransaction::query()->findOrFail($draft->id));
+        }
+
+        $draft->forceFill($cleared)->syncOriginal();
+    }
+
+    /**
+     * FR-SPIMS-007: a withdrawal is confirmed only on an identification that is present and within
+     * its time limit. Checked at review by WithdrawalService::guardReadyToConfirm(), and again by
+     * StockLedger on the locked row, because another tab can clear it, or the limit can pass, in
+     * between.
+     *
+     * @throws WithdrawalRefused
+     */
+    public function guardCurrent(StockTransaction $draft): void
+    {
+        if ($draft->personnel_id === null || $draft->identification_method === null || $draft->identified_at === null) {
+            throw WithdrawalRefused::notIdentified();
+        }
+
+        if (! $this->isCurrent($draft)) {
+            throw WithdrawalRefused::identificationExpired($this->timeoutSeconds());
+        }
     }
 
     /**
@@ -176,6 +211,29 @@ final readonly class WithdrawalIdentification
         }
 
         return $seconds;
+    }
+
+    /**
+     * Write an identification onto the draft's row under its lock, and only while it is still a
+     * Draft there: another tab may have completed the withdrawal since this copy was loaded, and a
+     * completed withdrawal keeps the person it was issued to. Call inside a database transaction.
+     *
+     * @param  array<string, mixed>  $identification
+     *
+     * @throws WithdrawalRefused
+     */
+    private function attach(StockTransaction $draft, array $identification): void
+    {
+        $locked = StockTransaction::query()->whereKey($draft->id)->lockForUpdate()->firstOrFail();
+
+        if ($locked->status !== TransactionStatus::Draft) {
+            throw WithdrawalRefused::notADraft($locked);
+        }
+
+        $locked->forceFill($identification)->save();
+
+        // The caller's copy reads what was written.
+        $draft->setRawAttributes($locked->getAttributes(), true)->unsetRelations();
     }
 
     /**

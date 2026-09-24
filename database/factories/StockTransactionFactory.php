@@ -36,6 +36,9 @@ class StockTransactionFactory extends Factory
             'equipment_id' => Equipment::factory(),
             'purpose_id' => fn () => WithdrawalPurpose::query()->orderBy('sort_order')->valueOrFail('id'),
             'identification_method' => IdentificationMethod::BadgeScan,
+            // Scanned just now, so StockLedger::completeWithOverrides() accepts it. Derived from
+            // personnel_id because identified_has_personnel forbids a time with nobody identified.
+            'identified_at' => fn (array $attributes): ?CarbonImmutable => $attributes['personnel_id'] === null ? null : CarbonImmutable::now(),
             'occurred_at' => CarbonImmutable::now(),
             'is_backdated' => false,
         ];

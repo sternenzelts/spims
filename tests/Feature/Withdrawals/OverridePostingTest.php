@@ -4,6 +4,8 @@ use App\Domain\Ledger\Events\StockDiscrepancyReported;
 use App\Domain\Ledger\Exceptions\InsufficientStock;
 use App\Domain\Ledger\LedgerVerifier;
 use App\Domain\Ledger\StockLedger;
+use App\Domain\Withdrawals\Exceptions\WithdrawalRefused;
+use App\Domain\Withdrawals\WithdrawalIdentification;
 use App\Enums\ReasonCode;
 use App\Enums\TransactionStatus;
 use App\Enums\TransactionType;
@@ -13,6 +15,7 @@ use App\Models\StockMovement;
 use App\Models\StockTransaction;
 use App\Models\User;
 use App\Models\WithdrawalOverride;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Event;
 
 beforeEach(function () {
@@ -178,6 +181,40 @@ it('posts a withdrawal with no overrides exactly as complete() does', function (
 
     expect(onHand($part))->toBe('6.000')
         ->and(StockTransaction::query()->where('type', TransactionType::Adjustment)->count())->toBe(0);
+});
+
+it('refuses, instead of failing on a constraint, a withdrawal whose identification was cleared after review', function () {
+    $part = partWithStock('10');
+    $draft = StockTransaction::factory()->withLines([[$part, '4']])->create([
+        'custodian_user_id' => $this->custodian->id,
+        'identified_at' => CarbonImmutable::now(),
+    ]);
+    // WithdrawalService::guardReadyToConfirm() passed on this copy; then another tab pressed
+    // "Not this person".
+    $reviewed = $draft->fresh();
+    app(WithdrawalIdentification::class)->clear($draft);
+
+    expect(fn () => $this->ledger->completeWithOverrides($reviewed, $this->custodian))
+        ->toThrow(WithdrawalRefused::class, 'scan their badge');
+
+    expect($draft->fresh()->status)->toBe(TransactionStatus::Draft)
+        ->and(onHand($part))->toBe('10.000');
+});
+
+it('refuses a withdrawal whose identification expired before the posting took its locks', function () {
+    $part = partWithStock('10');
+    $draft = StockTransaction::factory()->withLines([[$part, '4']])->create([
+        'custodian_user_id' => $this->custodian->id,
+        'identified_at' => CarbonImmutable::now(),
+    ]);
+
+    $this->travel(app(WithdrawalIdentification::class)->timeoutSeconds() + 1)->seconds();
+
+    expect(fn () => $this->ledger->completeWithOverrides($draft, $this->custodian))
+        ->toThrow(WithdrawalRefused::class, 'expired');
+
+    expect($draft->fresh()->status)->toBe(TransactionStatus::Draft)
+        ->and(onHand($part))->toBe('10.000');
 });
 
 it('refuses to post a draft holding overrides through complete()', function () {

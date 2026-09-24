@@ -109,6 +109,16 @@ it('clears an identification when the person at the counter is not the one on sc
     expect($this->draft->fresh())->identified_at->toBeNull()->personnel_id->toBeNull();
 });
 
+it('clears an identification that its copy of the draft has not seen', function () {
+    $stale = $this->draft->fresh();
+    $this->identification->identify($this->draft, 'A1234BCDE', $this->custodian);
+
+    $this->identification->clear($stale);
+
+    expect($this->draft->fresh())->identified_at->toBeNull()->personnel_id->toBeNull()
+        ->and($stale->isDirty())->toBeFalse();
+});
+
 it('refuses to confirm a withdrawal that has not been identified', function () {
     readyExceptIdentification($this->service, $this->draft);
 
@@ -132,4 +142,14 @@ it('clears the identification when the cart changes after the scan', function ()
     $this->service->addLine($this->draft->fresh(), Part::factory()->create(), '1');
 
     expect($this->draft->fresh()->identified_at)->toBeNull();
+});
+
+it('clears a scan taken in another tab when this tab changes the cart', function () {
+    // This tab loaded the draft before the other tab's scan, so its copy reads as unidentified.
+    $stale = $this->draft->fresh();
+    $this->identification->identify($this->draft, 'A1234BCDE', $this->custodian);
+
+    $this->service->addLine($stale, Part::factory()->create(), '1');
+
+    expect($this->draft->fresh())->identified_at->toBeNull()->personnel_id->toBeNull();
 });
