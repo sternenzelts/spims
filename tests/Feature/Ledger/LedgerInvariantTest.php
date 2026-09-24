@@ -71,29 +71,40 @@ it('keeps every balance equal to its ledger through random postings and backdate
 
         // Design §5.3: one short withdrawal in three is issued anyway, after a supervisor counts
         // the shelf and authorises every short line. Two transactions per posting, one lock
-        // acquisition, and every overridden part lands exactly on zero — the boundary the
-        // on_hand >= 0 constraint guards.
+        // acquisition. The count is the line or up to three more, so an overridden part lands on
+        // what the count left — on zero, the boundary the on_hand >= 0 constraint guards, when
+        // the count is exactly the line. A line the balance covers sometimes carries an override
+        // too, which the posting discards.
         if ($type === TransactionType::Withdrawal && $wouldGoNegative && mt_rand(1, 3) === 1) {
-            $overridden = [];
+            $verified = [];
 
             foreach ($lines as [$part, $quantity]) {
-                if ($expected[$part->id]->isLessThan($quantity)) {
-                    $overridden[$part->id] = true;
-                    WithdrawalOverride::factory()->create([
-                        'stock_transaction_id' => $draft->id,
-                        'part_id' => $part->id,
-                        'verified_qty' => $quantity,
-                        'recorded_on_hand' => (string) $expected[$part->id],
-                        'authorised_by_user_id' => $custodian->id,
-                    ]);
+                $isShort = $expected[$part->id]->isLessThan($quantity);
+
+                if (! $isShort && mt_rand(0, 1) === 0) {
+                    continue;
                 }
+
+                $count = BigDecimal::of($quantity)->plus(mt_rand(0, 3));
+
+                if ($isShort) {
+                    $verified[$part->id] = $count;
+                }
+
+                WithdrawalOverride::factory()->create([
+                    'stock_transaction_id' => $draft->id,
+                    'part_id' => $part->id,
+                    'verified_qty' => (string) $count,
+                    'recorded_on_hand' => (string) $expected[$part->id],
+                    'authorised_by_user_id' => $custodian->id,
+                ]);
             }
 
             $ledger->completeWithOverrides($draft, $custodian);
 
             foreach ($lines as [$part, $quantity]) {
-                $expected[$part->id] = isset($overridden[$part->id])
-                    ? BigDecimal::zero()
+                $expected[$part->id] = isset($verified[$part->id])
+                    ? $verified[$part->id]->minus($quantity)
                     : $expected[$part->id]->minus($quantity);
             }
 
@@ -133,4 +144,8 @@ it('keeps every balance equal to its ledger through random postings and backdate
     // The sequence really exercised backdating: occurred_at order differs from recording order.
     $occurred = StockMovement::query()->orderBy('id')->pluck('occurred_at');
     expect($occurred->sort()->values()->all())->not->toEqual($occurred->all());
+
+    // And both outcomes of an override: an adjustment posted, and an override discarded.
+    expect(WithdrawalOverride::query()->whereNotNull('adjustment_transaction_id')->exists())->toBeTrue("Seed {$seed}: no override posted")
+        ->and(WithdrawalOverride::query()->whereNotNull('discarded_at')->exists())->toBeTrue("Seed {$seed}: no override discarded");
 })->with([1, 2, 3]);

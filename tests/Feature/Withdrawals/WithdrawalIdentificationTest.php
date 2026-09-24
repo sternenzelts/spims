@@ -65,20 +65,35 @@ it('refuses a badge nobody holds and audits the rejection with the masked badge 
         ]);
 });
 
-it('refuses the badge of a person who has left', function () {
+it('refuses the badge of a person who has left and audits the rejection masked', function () {
     $this->person->forceFill(['is_active' => false])->save();
 
     expect(fn () => $this->identification->identify($this->draft, 'A1234BCDE', $this->custodian))
         ->toThrow(WithdrawalRefused::class, 'not recognised');
+
+    $audit = AuditLog::query()->where('event', 'badge_scan_rejected')->sole();
+
+    expect($this->draft->fresh()->personnel_id)->toBeNull()
+        ->and($audit->auditable_type)->toBe('stock_transaction')
+        ->and($audit->user_id)->toBe($this->custodian->id)
+        ->and($audit->new_values)->toBe([
+            'reason' => 'not_recognised',
+            'badge_uid_masked' => 'A1234****',
+        ]);
 });
 
-it('refuses unreadable reader input and records no badge value', function () {
-    expect(fn () => $this->identification->identify($this->draft, '   ', $this->custodian))
+it('refuses unreadable reader input and records no badge value', function (string $input) {
+    expect(fn () => $this->identification->identify($this->draft, $input, $this->custodian))
         ->toThrow(WithdrawalRefused::class, 'could not be read');
 
-    expect(AuditLog::query()->where('event', 'badge_scan_rejected')->sole()->new_values)
+    expect($this->draft->fresh()->personnel_id)->toBeNull()
+        ->and(AuditLog::query()->where('event', 'badge_scan_rejected')->sole()->new_values)
         ->toBe(['reason' => 'unreadable']);
-});
+})->with([
+    'blank' => '   ',
+    'a character no badge has' => 'A1234!BCDE',
+    'too short' => 'A12',
+]);
 
 it('stops a reader that will not stop scanning', function () {
     for ($scan = 1; $scan <= WithdrawalIdentification::MAX_SCANS_PER_MINUTE; $scan++) {
@@ -122,8 +137,9 @@ it('clears an identification that its copy of the draft has not seen', function 
 it('refuses to confirm a withdrawal that has not been identified', function () {
     readyExceptIdentification($this->service, $this->draft);
 
+    // Not just "scan": the expiry message ("The badge scan expired…") contains that too.
     expect(fn () => $this->service->guardReadyToConfirm($this->draft->fresh()))
-        ->toThrow(WithdrawalRefused::class, 'scan');
+        ->toThrow(WithdrawalRefused::class, 'Ask the person receiving the parts to scan their badge');
 });
 
 it('refuses to confirm a withdrawal whose identification has expired', function () {

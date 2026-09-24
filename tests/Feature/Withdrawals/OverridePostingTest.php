@@ -86,10 +86,37 @@ it('numbers the adjustment before the withdrawal', function () {
     $draft = StockTransaction::factory()->withLines([[$part, '5']])->create(['custodian_user_id' => $this->custodian->id]);
     $override = authorise($draft, $part, '8', '3');
 
+    // After the opening balance, so its own number is not in the log.
+    DB::enableQueryLog();
     $completed = $this->ledger->completeWithOverrides($draft, $this->custodian);
 
-    expect($override->fresh()->adjustment->transaction_no)->toStartWith('AJ-')
+    // Each prefix has its own sequence row, so the numbers alone cannot show the order. The order
+    // the rows are taken in is also what keeps two postings from deadlocking on them (review A).
+    $numbered = collect(DB::getQueryLog())
+        ->filter(fn (array $entry): bool => str_contains($entry['query'], 'insert into transaction_number_sequences'))
+        ->map(fn (array $entry): mixed => $entry['bindings'][0])
+        ->values()
+        ->all();
+
+    expect($numbered)->toBe(['AJ', 'WD'])
+        ->and($override->fresh()->adjustment->transaction_no)->toStartWith('AJ-')
         ->and($completed->transaction_no)->toStartWith('WD-');
+});
+
+it('never lets an override lower a balance, whatever its verified quantity', function () {
+    $part = partWithStock('3');
+    $draft = StockTransaction::factory()->withLines([[$part, '5']])->create(['custodian_user_id' => $this->custodian->id]);
+    // Only inconsistent data reaches this: authoriseOverride() refuses a count below the line, and
+    // raising a line past its count removes the override. The locked 3 sits between the count of 2
+    // and the line of 5, so the adjustment would be -1.
+    authorise($draft, $part, '2', '3');
+
+    expect(fn () => $this->ledger->completeWithOverrides($draft, $this->custodian))
+        ->toThrow(InsufficientStock::class);
+
+    expect($draft->fresh()->status)->toBe(TransactionStatus::Draft)
+        ->and(StockTransaction::query()->where('type', TransactionType::Adjustment)->count())->toBe(0)
+        ->and(onHand($part))->toBe('3.000');
 });
 
 it('computes the adjustment from the locked balance, not the one the supervisor saw', function () {
