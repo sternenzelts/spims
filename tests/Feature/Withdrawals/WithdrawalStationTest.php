@@ -237,6 +237,30 @@ it('asks for a new count when the part moved after the supervisor counted it', f
         ->where('type', TransactionType::Withdrawal)
         ->where('status', TransactionStatus::Completed)
         ->count())->toBe(0);
+
+    // Wave 2: the line must offer a way to ask for a new count, without removing and re-adding it.
+    $component->assertSeeHtml("requestOverride({$short->id})")
+        ->assertDontSee('Override authorised');
+
+    // And that new count really does let the withdrawal go through: re-authorise, re-scan (the
+    // authorisation invalidated the stale scan too) and confirm.
+    $this->travel(1)->seconds();
+
+    $component->call('requestOverride', $short->id)
+        ->set('verifiedQty', '6')
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'counter-secret')
+        ->call('authoriseOverride')
+        ->assertHasNoErrors()
+        ->set('badge', 'A1234BCDE')
+        ->call('scan')
+        ->call('confirm')
+        ->assertHasNoErrors();
+
+    expect(StockTransaction::query()
+        ->where('type', TransactionType::Withdrawal)
+        ->where('status', TransactionStatus::Completed)
+        ->count())->toBe(1);
 });
 
 it('lets a supervisor identify a person who has no badge', function () {

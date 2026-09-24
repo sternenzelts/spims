@@ -12,6 +12,7 @@ use App\Enums\TransactionType;
 use App\Models\Equipment;
 use App\Models\Part;
 use App\Models\PartStock;
+use App\Models\StockMovement;
 use App\Models\StockTransaction;
 use App\Models\StockTransactionLine;
 use App\Models\User;
@@ -316,9 +317,20 @@ final readonly class WithdrawalService
             $quantity = BigDecimal::of($line->quantity);
             $isShort = $onHand->isLessThan($quantity);
 
-            // An authorised override raises the balance to the verified quantity at commit, so the
-            // resulting balance the custodian is shown is the one that override will really leave.
-            $base = $isShort && $override instanceof WithdrawalOverride
+            // The staleness guard of design §5.6.1, mirrored from StockLedger::postWithOverrides():
+            // once stock of the part is recorded moving after the count, confirming would refuse the
+            // override, so the review must not show it as still good. Same >= as the ledger's own
+            // check — timestamps are stored to the second, and a movement in the same second as the
+            // authorisation counts as after it.
+            $staleOverride = $override instanceof WithdrawalOverride
+                && StockMovement::query()
+                    ->where('part_id', $override->part_id)
+                    ->where('recorded_at', '>=', $override->authorised_at)
+                    ->exists();
+
+            // An authorised, still-good override raises the balance to the verified quantity at
+            // commit, so the resulting balance the custodian is shown is the one it will really leave.
+            $base = $isShort && $override instanceof WithdrawalOverride && ! $staleOverride
                 ? BigDecimal::of($override->verified_qty)
                 : $onHand;
 
@@ -330,6 +342,7 @@ final readonly class WithdrawalService
                 resulting: (string) $resulting->toScale(3),
                 isShort: $isShort,
                 override: $override,
+                staleOverride: $staleOverride,
                 level: $this->levelWarning($line->part, $resulting),
             );
         }

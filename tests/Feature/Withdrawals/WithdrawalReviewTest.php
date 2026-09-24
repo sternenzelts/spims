@@ -1,7 +1,9 @@
 <?php
 
+use App\Domain\Ledger\StockLedger;
 use App\Domain\Withdrawals\WithdrawalService;
 use App\Enums\LevelWarning;
+use App\Models\StockTransaction;
 use App\Models\User;
 use App\Models\WithdrawalOverride;
 
@@ -45,6 +47,9 @@ it('shows the balance an authorised override will really leave', function () {
     $part = partWithStock('3');
     $draft = $this->service->openDraft($this->custodian);
     $this->service->addLine($draft, $part, '5');
+    // The count comes after the opening balance; timestamps are stored to the second, and the
+    // staleness check below treats a movement in the same second as the count as after it.
+    $this->travel(1)->seconds();
     WithdrawalOverride::factory()->create([
         'stock_transaction_id' => $draft->id,
         'part_id' => $part->id,
@@ -59,6 +64,35 @@ it('shows the balance an authorised override will really leave', function () {
         ->and($review->lines[0]->onHand)->toBe('3.000')
         ->and($review->lines[0]->resulting)->toBe('3.000')
         ->and($review->needsOverride())->toBeFalse();
+});
+
+it('treats an override as needing a new one once the part moved after it was counted', function () {
+    $part = partWithStock('3');
+    $draft = $this->service->openDraft($this->custodian);
+    $this->service->addLine($draft, $part, '5');
+    $this->travel(1)->seconds();
+    $override = WithdrawalOverride::factory()->create([
+        'stock_transaction_id' => $draft->id,
+        'part_id' => $part->id,
+        'verified_qty' => '8.000',
+        'recorded_on_hand' => '3.000',
+    ]);
+
+    // Another station records stock of the same part after the count.
+    $this->travel(1)->seconds();
+    $delivery = StockTransaction::factory()->replenishment()->withLines([[$part, '1']])->create();
+    app(StockLedger::class)->complete($delivery, $this->custodian);
+
+    $review = $this->service->review($draft);
+
+    expect($review->lines[0]->isShort)->toBeTrue()
+        // The stale count no longer covers the line: back to "not enough stock", not "authorised".
+        ->and($review->lines[0]->needsOverride())->toBeTrue()
+        // The stale override's verified quantity is no longer projected into the resulting balance.
+        ->and($review->lines[0]->resulting)->toBe('-1.000')
+        ->and($review->needsOverride())->toBeTrue();
+
+    expect($override->fresh())->not->toBeNull();
 });
 
 it('warns when a line takes a part to or below a level', function (string $onHand, string $quantity, ?LevelWarning $expected) {
