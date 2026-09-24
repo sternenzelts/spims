@@ -91,6 +91,30 @@ it('refuses a delivery received on an earlier day and names the backdated entry 
         ->assertHasErrors('receivedOn');
 });
 
+it('refuses to confirm after midnight a delivery saved the day before, even after a reload', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-09-24 23:50:00', 'Asia/Manila'));
+
+    Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-1')
+        ->set('receivedOn', '2026-09-24')
+        ->call('saveDelivery')
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->assertHasNoErrors();
+
+    $this->travelTo(CarbonImmutable::parse('2026-09-25 00:10:00', 'Asia/Manila'));
+
+    // A reload fills the date field with the new day; what was saved still says yesterday.
+    Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->assertSet('receivedOn', '2026-09-25')
+        ->call('confirm')
+        ->assertHasErrors('draft')
+        ->assertSee('backdated entry');
+
+    expect(onHand($this->part))->toBe('4.000');
+});
+
 it('refuses to confirm before there is a delivery and a line', function () {
     Livewire::actingAs($this->custodian)->test(Replenishment::class)
         ->call('confirm')

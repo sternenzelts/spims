@@ -80,9 +80,7 @@ final readonly class ReplenishmentService
             throw ReplenishmentRefused::referenceRequired();
         }
 
-        // Compared in the install time zone: at 00:30 in Manila it is still yesterday in UTC, and
-        // the early shift must not be told that today's delivery is in the future.
-        $today = CarbonImmutable::now()->setTimezone($this->settings->timezone())->toDateString();
+        $today = $this->today();
 
         if ($receivedOn > $today) {
             throw ReplenishmentRefused::receivedInFuture();
@@ -93,7 +91,14 @@ final readonly class ReplenishmentService
         }
 
         $this->change($draft, function (StockTransaction $draft) use ($supplier, $referenceNo): void {
-            $draft->forceFill(['supplier' => $supplier, 'reference_no' => $referenceNo])->save();
+            $draft->forceFill([
+                'supplier' => $supplier,
+                'reference_no' => $referenceNo,
+                // When the delivery was stated as received, today. The ledger stamps the commit time
+                // over it, because the entry is not backdated; guardReadyToConfirm() checks that the
+                // commit is still on the same day.
+                'occurred_at' => CarbonImmutable::now(),
+            ])->save();
         });
     }
 
@@ -188,6 +193,12 @@ final readonly class ReplenishmentService
             throw ReplenishmentRefused::referenceRequired();
         }
 
+        // Decision 10: a delivery is recorded on the day it was received. That was checked when the
+        // delivery was saved, but a draft left open past midnight would post under the next day.
+        if ($draft->occurred_at->setTimezone($this->settings->timezone())->toDateString() !== $this->today()) {
+            throw ReplenishmentRefused::receivedEarlier();
+        }
+
         if ($draft->lines()->count() === 0) {
             throw ReplenishmentRefused::noLines();
         }
@@ -240,6 +251,15 @@ final readonly class ReplenishmentService
         }
 
         return $over;
+    }
+
+    /**
+     * Today in the install time zone: at 00:30 in Manila it is still yesterday in UTC, and the early
+     * shift must not be told that today's delivery is in the future.
+     */
+    private function today(): string
+    {
+        return CarbonImmutable::now()->setTimezone($this->settings->timezone())->toDateString();
     }
 
     /**

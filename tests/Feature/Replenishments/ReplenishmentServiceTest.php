@@ -103,6 +103,29 @@ it('accepts today in the install time zone even when UTC has not caught up', fun
     expect($draft->fresh()->reference_no)->toBe('DR-1');
 });
 
+it('refuses to confirm, after midnight, a delivery saved as received the day before', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-09-24 23:50:00', 'Asia/Manila'));
+    $draft = $this->service->openDraft($this->custodian);
+    $this->service->setDelivery($draft, 'Pacific Bearings Inc.', 'DR-1', '2026-09-24');
+    $this->service->addLine($draft, Part::factory()->create(), '5', null);
+
+    $this->travelTo(CarbonImmutable::parse('2026-09-25 00:10:00', 'Asia/Manila'));
+
+    expect(fn () => $this->service->guardReadyToConfirm($draft->fresh()))
+        ->toThrow(ReplenishmentRefused::class, 'backdated entry');
+});
+
+it('confirms a delivery saved today on a draft opened the day before', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-09-24 23:50:00', 'Asia/Manila'));
+    $draft = $this->service->openDraft($this->custodian);
+    $this->service->addLine($draft, Part::factory()->create(), '5', null);
+
+    $this->travelTo(CarbonImmutable::parse('2026-09-25 00:10:00', 'Asia/Manila'));
+    $this->service->setDelivery($draft, 'Pacific Bearings Inc.', 'DR-1', '2026-09-25');
+
+    expect(fn () => $this->service->guardReadyToConfirm($draft->fresh()))->not->toThrow(ReplenishmentRefused::class);
+});
+
 it('warns about a delivery reference already recorded for the same supplier', function () {
     $part = Part::factory()->create();
     $earlier = $this->service->openDraft($this->custodian);
