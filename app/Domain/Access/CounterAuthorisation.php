@@ -33,7 +33,9 @@ final readonly class CounterAuthorisation
     public function verify(string $email, string $password, Permission $permission, string $fromAddress): User
     {
         $email = Str::lower(trim($email));
-        $key = "counter-authorisation:{$permission->value}|{$email}|{$fromAddress}";
+        // Per email and address, whatever is being authorised: Decision 2's five attempts are one
+        // budget, not one for each permission.
+        $key = "counter-authorisation:{$email}|{$fromAddress}";
 
         if (RateLimiter::tooManyAttempts($key, self::MAX_ATTEMPTS)) {
             throw AuthorisationRefused::tooManyAttempts(RateLimiter::availableIn($key));
@@ -42,20 +44,17 @@ final readonly class CounterAuthorisation
         // Matched ignoring case: Plan 2 leaves the profile screen storing email as typed.
         $user = User::query()->whereRaw('lower(email) = ?', [$email])->first();
 
-        if (! $user instanceof User || ! Hash::check($password, $user->password)) {
+        // Active is checked before the password, as the sign-in does (FortifyServiceProvider), so a
+        // deactivated account gets the answer a wrong password gets and its password is never
+        // confirmed. It costs an attempt all the same.
+        if (! $user instanceof User || ! $user->is_active || ! Hash::check($password, $user->password)) {
             RateLimiter::hit($key, self::DECAY_SECONDS);
 
             throw AuthorisationRefused::credentials();
         }
 
-        // A correct password still costs an attempt when the account cannot authorise, so the
-        // lockout never tells anyone which of the three things they got wrong.
-        if (! $user->is_active) {
-            RateLimiter::hit($key, self::DECAY_SECONDS);
-
-            throw AuthorisationRefused::inactive($user);
-        }
-
+        // A correct password still costs an attempt when the account may not authorise this, so
+        // the lockout never tells anyone which thing they got wrong.
         if (! $user->can($permission)) {
             RateLimiter::hit($key, self::DECAY_SECONDS);
 

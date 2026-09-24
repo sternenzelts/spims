@@ -17,11 +17,6 @@ final class AuthorisationRefused extends RuntimeException
         return new self(__('Those credentials do not match an account that can authorise this.'));
     }
 
-    public static function inactive(User $user): self
-    {
-        return new self(__('The account for :email is no longer Active.', ['email' => $user->email]));
-    }
-
     public static function notPermitted(User $user): self
     {
         return new self(__(':name is not allowed to authorise this. Ask an Inventory Supervisor.', [
