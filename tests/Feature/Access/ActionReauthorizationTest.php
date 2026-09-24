@@ -101,6 +101,9 @@ dataset('reauthorized actions', [
     'Station\Withdrawal::requestManualIdentification' => [
         Role::Custodian, StationWithdrawal::class, fn () => [], 'requestManualIdentification', fn () => [],
     ],
+    'Station\Withdrawal::forgetSupervisorCredentials' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'forgetSupervisorCredentials', fn () => [],
+    ],
     'Station\Withdrawal::identifyManually' => [
         Role::Custodian, StationWithdrawal::class, fn () => [], 'identifyManually', fn () => [],
     ],

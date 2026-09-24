@@ -103,6 +103,7 @@ class Withdrawal extends Component
 
         if (! $part instanceof Part) {
             $this->addError('partEntry', __('No spare part has that number. Pick one from the matches below.'));
+            $this->dispatch('station-focus', field: 'partEntry');
 
             return;
         }
@@ -119,6 +120,7 @@ class Withdrawal extends Component
             app(WithdrawalService::class)->addLine($this->draft(), Part::query()->findOrFail($partId), $this->quantity);
         } catch (WithdrawalRefused $refused) {
             $this->addError('partEntry', $refused->getMessage());
+            $this->dispatch('station-focus', field: 'partEntry');
 
             return;
         }
@@ -126,6 +128,9 @@ class Withdrawal extends Component
         $this->partEntry = '';
         $this->quantity = '1';
         $this->forget();
+        // Whether typed or picked from the matches below, the part field is where the next scan
+        // or the next part goes (walk W1).
+        $this->dispatch('station-focus', field: 'partEntry');
     }
 
     public function removeLine(int $lineId): void
@@ -157,6 +162,7 @@ class Withdrawal extends Component
             );
         } catch (WithdrawalRefused $refused) {
             $this->addError('equipmentId', $refused->getMessage());
+            $this->dispatch('station-focus', field: 'equipmentId');
 
             return;
         }
@@ -176,6 +182,7 @@ class Withdrawal extends Component
             app(WithdrawalIdentification::class)->identify($this->draft(), $this->badge, $this->actor());
         } catch (WithdrawalRefused $refused) {
             $this->addError('badge', $refused->getMessage());
+            $this->dispatch('station-focus', field: 'badge');
 
             return;
         } finally {
@@ -183,6 +190,7 @@ class Withdrawal extends Component
         }
 
         $this->forget();
+        $this->dispatch('station-focus', field: 'confirmWithdrawal');
     }
 
     /**
@@ -195,6 +203,7 @@ class Withdrawal extends Component
         app(WithdrawalIdentification::class)->clear($this->draft());
 
         $this->forget();
+        $this->dispatch('station-focus', field: 'badge');
     }
 
     public function requestOverride(int $partId): void
@@ -237,10 +246,12 @@ class Withdrawal extends Component
             );
         } catch (AuthorisationRefused $refused) {
             $this->addError('supervisorPassword', $refused->getMessage());
+            $this->dispatch('station-focus', field: 'supervisorPassword');
 
             return;
         } catch (WithdrawalRefused $refused) {
             $this->addError('verifiedQty', $refused->getMessage());
+            $this->dispatch('station-focus', field: 'verifiedQty');
 
             return;
         } finally {
@@ -250,6 +261,10 @@ class Withdrawal extends Component
         Flux::modal('supervisor-override')->close();
         Flux::toast(variant: 'success', text: __('Override authorised. The adjustment is recorded when you confirm.'));
         $this->forget();
+        // Authorising an override always clears the identification (it changes the cart's stock
+        // story), so this lands on the scan field in practice — checked, not assumed, because the
+        // same helper also serves identifyManually(), where the person is now identified.
+        $this->focusAfterIdentificationChange();
     }
 
     /**
@@ -294,10 +309,12 @@ class Withdrawal extends Component
             );
         } catch (AuthorisationRefused $refused) {
             $this->addError('supervisorPassword', $refused->getMessage());
+            $this->dispatch('station-focus', field: 'manualSupervisorPassword');
 
             return;
         } catch (WithdrawalRefused $refused) {
             $this->addError('manualReason', $refused->getMessage());
+            $this->dispatch('station-focus', field: 'manualReason');
 
             return;
         } finally {
@@ -306,6 +323,7 @@ class Withdrawal extends Component
 
         Flux::modal('manual-identification')->close();
         $this->forget();
+        $this->focusAfterIdentificationChange();
     }
 
     /**
@@ -324,6 +342,24 @@ class Withdrawal extends Component
         } catch (WithdrawalRefused|InstallNotConfigured $refused) {
             $this->addError('draft', $refused->getMessage());
 
+            // FR-SPIMS-007 alternate flow: an expired identification is cleared, not just
+            // reported, so the scan field is back on screen beside the message instead of the
+            // stale callout staying up until "Not this person" is pressed.
+            if ($draft->identified_at !== null && ! app(WithdrawalIdentification::class)->isCurrent($draft)) {
+                try {
+                    app(WithdrawalService::class)->invalidate($draft);
+                } catch (WithdrawalRefused) {
+                    // Another request already moved the draft past Draft; nothing left to clear.
+                }
+
+                $this->forget();
+                $this->dispatch('station-focus', field: 'badge');
+
+                return;
+            }
+
+            $this->dispatch('station-focus', field: $this->focusForConfirmRefusal($draft));
+
             return;
         } catch (InsufficientStock $short) {
             $this->addError('draft', __('Stock changed while you were reviewing. Short: :parts', [
@@ -333,20 +369,36 @@ class Withdrawal extends Component
                 )),
             ]));
             $this->forget();
+            $this->dispatch('station-focus', field: 'confirmWithdrawal');
 
             return;
         } catch (StockMovedSinceCount $stale) {
             $this->addError('draft', $stale->getMessage());
             $this->forget();
+            $this->dispatch('station-focus', field: 'confirmWithdrawal');
 
             return;
         } catch (StockBusy $busy) {
             $this->addError('draft', $busy->getMessage());
+            $this->dispatch('station-focus', field: 'confirmWithdrawal');
 
             return;
         }
 
         $this->redirectRoute('station.receipt', ['transaction' => $completed->id], navigate: true);
+    }
+
+    /**
+     * Flux's wire:close fires whenever either dialog closes, by any route — submit, Escape, the
+     * backdrop or the close button — so a password typed into a dismissed dialog never survives on
+     * the server (review B, wave-1 leftover). The two dialogs share these fields (never persisted).
+     */
+    public function forgetSupervisorCredentials(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+
+        $this->supervisorEmail = '';
+        $this->supervisorPassword = '';
     }
 
     public function cancelDraft(): void
@@ -371,6 +423,20 @@ class Withdrawal extends Component
     public function review(): WithdrawalReview
     {
         return app(WithdrawalService::class)->review($this->draft());
+    }
+
+    /**
+     * Whether the identified-person callout should show (finding C3, walk W3): personnel_id alone
+     * is not enough, because nothing clears it merely because the time limit passed. An expired
+     * identification renders the scan field again on its own, without waiting for a failed confirm
+     * or a click on "Not this person".
+     */
+    #[Computed]
+    public function identifiedAndCurrent(): bool
+    {
+        $draft = $this->draft();
+
+        return $draft->personnel_id !== null && app(WithdrawalIdentification::class)->isCurrent($draft);
     }
 
     /**
@@ -430,10 +496,56 @@ class Withdrawal extends Component
     }
 
     /**
+     * FR-SPIMS-007: after an override is authorised or a manual identification succeeds, focus
+     * goes to Confirm if the person is still identified, or the scan field if that same change
+     * just cleared it — authorising an override always does (WithdrawalService::authoriseOverride()
+     * calls invalidate()); a manual identification instead just wrote one. Checked on the draft's
+     * current state rather than assumed from which action ran, so this stays correct either way.
+     */
+    private function focusAfterIdentificationChange(): void
+    {
+        $draft = $this->draft();
+
+        $current = $draft->personnel_id !== null && app(WithdrawalIdentification::class)->isCurrent($draft);
+
+        $this->dispatch('station-focus', field: $current ? 'confirmWithdrawal' : 'badge');
+    }
+
+    /**
+     * confirm()'s own checks, in guardReadyToConfirm()'s order, re-derived from the draft's current
+     * state rather than from WithdrawalRefused (which carries only a message, not a reason), so the
+     * field a refusal is about gets focus without a domain change.
+     */
+    private function focusForConfirmRefusal(StockTransaction $draft): string
+    {
+        if ($draft->lines()->count() === 0) {
+            return 'partEntry';
+        }
+
+        if ($draft->equipment_id === null) {
+            return 'equipmentId';
+        }
+
+        $purpose = $draft->purpose;
+
+        if (! $purpose instanceof WithdrawalPurpose) {
+            return 'purposeId';
+        }
+
+        if ($purpose->requires_remarks && trim((string) $draft->remarks) === '') {
+            return 'remarks';
+        }
+
+        // Not identified at all (an expired identification is handled separately, above, because
+        // it also clears the stale identification rather than just refusing on it).
+        return 'badge';
+    }
+
+    /**
      * Drop the cached draft and review, so the next render reads what was just written.
      */
     private function forget(): void
     {
-        unset($this->draft, $this->review, $this->matches);
+        unset($this->draft, $this->review, $this->matches, $this->identifiedAndCurrent);
     }
 }
