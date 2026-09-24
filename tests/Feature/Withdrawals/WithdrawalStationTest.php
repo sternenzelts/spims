@@ -138,7 +138,8 @@ it('lets a supervisor authorise an override at the counter', function () {
         ->set('supervisorEmail', 'rita@microtech.test')
         ->set('supervisorPassword', 'counter-secret')
         ->call('authoriseOverride')
-        ->assertHasNoErrors();
+        ->assertHasNoErrors()
+        ->assertSet('supervisorPassword', '');
 
     $draft = app(WithdrawalService::class)->openDraft($this->custodian);
 
@@ -203,13 +204,77 @@ it('lets a supervisor identify a person who has no badge', function () {
     Livewire::actingAs($this->custodian)->test(Withdrawal::class)
         ->set('partEntry', 'BRG-6204')
         ->call('enterPart')
+        ->call('requestManualIdentification')
         ->set('manualPersonnelId', (string) $this->person->id)
         ->set('manualReason', 'Badge left at home')
         ->set('supervisorEmail', 'rita@microtech.test')
         ->set('supervisorPassword', 'counter-secret')
         ->call('identifyManually')
         ->assertHasNoErrors()
+        ->assertSet('supervisorPassword', '')
         ->assertSee('Rosalie Mendoza');
+});
+
+it('opens the no-badge dialog through the server, so it starts empty', function () {
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->assertSeeHtml('wire:click="requestManualIdentification"')
+        ->set('manualPersonnelId', (string) $this->person->id)
+        ->set('manualReason', 'Left over from last time')
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'counter-secret')
+        ->call('requestManualIdentification')
+        ->assertSet('manualPersonnelId', '')
+        ->assertSet('manualReason', '')
+        ->assertSet('supervisorEmail', '')
+        ->assertSet('supervisorPassword', '');
+});
+
+it('never lets a password typed into a dismissed override identify someone by hand', function () {
+    $short = partWithStock('1', ['part_number' => 'BLT-100']);
+
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BLT-100')
+        ->set('quantity', '5')
+        ->call('enterPart')
+        ->call('requestOverride', $short->id)
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'counter-secret')
+        // The custodian dismisses the override dialog: nothing is submitted. Later they open
+        // "No badge?", pick someone and submit without the supervisor typing anything.
+        ->call('requestManualIdentification')
+        ->set('manualPersonnelId', (string) $this->person->id)
+        ->set('manualReason', 'Badge left at home')
+        ->call('identifyManually')
+        ->assertHasErrors('supervisorPassword');
+
+    expect(app(WithdrawalService::class)->openDraft($this->custodian)->personnel_id)->toBeNull();
+});
+
+it('forgets the supervisor credentials when the draft is cancelled', function () {
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'counter-secret')
+        ->call('cancelDraft')
+        ->assertSet('supervisorEmail', '')
+        ->assertSet('supervisorPassword', '');
+});
+
+it('clears the supervisor password after an authorisation that the draft refuses', function () {
+    $short = partWithStock('1', ['part_number' => 'BLT-100']);
+
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BLT-100')
+        ->set('quantity', '5')
+        ->call('enterPart')
+        ->call('requestOverride', $short->id)
+        ->set('verifiedQty', '4')
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'counter-secret')
+        ->call('authoriseOverride')
+        ->assertHasErrors('verifiedQty')
+        ->assertSet('supervisorPassword', '');
 });
 
 it('names the spare parts when stock ran out while the custodian was reviewing', function () {

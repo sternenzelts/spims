@@ -250,6 +250,24 @@ class Withdrawal extends Component
     }
 
     /**
+     * Opens "No badge?" empty, as requestOverride() opens its dialog. The two dialogs share the
+     * supervisor fields, so a password typed into a dismissed dialog must never be submitted by the
+     * other one in the name of a supervisor who approved nothing.
+     */
+    public function requestManualIdentification(): void
+    {
+        $this->authorize(Permission::WithdrawalsProcess);
+        $this->resetErrorBag();
+
+        $this->manualPersonnelId = '';
+        $this->manualReason = '';
+        $this->supervisorEmail = '';
+        $this->supervisorPassword = '';
+
+        Flux::modal('manual-identification')->show();
+    }
+
+    /**
      * FR-SPIMS-007 alternate flow, pending Microtech's answer to Q12.
      */
     public function identifyManually(): void
@@ -334,7 +352,7 @@ class Withdrawal extends Component
 
         app(WithdrawalService::class)->cancel($this->draft(), $this->actor());
 
-        $this->reset(['partEntry', 'quantity', 'equipmentId', 'purposeId', 'remarks', 'badge']);
+        $this->reset(['partEntry', 'quantity', 'equipmentId', 'purposeId', 'remarks', 'badge', 'supervisorEmail', 'supervisorPassword']);
         $this->forget();
 
         Flux::toast(variant: 'success', text: __('Withdrawal cancelled. Nothing was recorded.'));

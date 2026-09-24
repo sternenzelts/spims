@@ -98,6 +98,9 @@ dataset('reauthorized actions', [
     'Station\Withdrawal::authoriseOverride' => [
         Role::Custodian, StationWithdrawal::class, fn () => [], 'authoriseOverride', fn () => [],
     ],
+    'Station\Withdrawal::requestManualIdentification' => [
+        Role::Custodian, StationWithdrawal::class, fn () => [], 'requestManualIdentification', fn () => [],
+    ],
     'Station\Withdrawal::identifyManually' => [
         Role::Custodian, StationWithdrawal::class, fn () => [], 'identifyManually', fn () => [],
     ],

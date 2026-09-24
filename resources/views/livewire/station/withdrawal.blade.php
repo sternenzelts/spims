@@ -125,9 +125,7 @@
                 class="max-w-sm"
             />
             <flux:button wire:click="scan">{{ __('Scan') }}</flux:button>
-            <flux:modal.trigger name="manual-identification">
-                <flux:button variant="subtle">{{ __('No badge?') }}</flux:button>
-            </flux:modal.trigger>
+            <flux:button variant="subtle" wire:click="requestManualIdentification">{{ __('No badge?') }}</flux:button>
         </div>
         <flux:error name="badge" />
     @endif
