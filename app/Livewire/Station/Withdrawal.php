@@ -153,9 +153,11 @@ class Withdrawal extends Component
         $this->authorize(Permission::WithdrawalsProcess);
         $this->resetErrorBag();
 
+        $draft = $this->draft();
+
         try {
             app(WithdrawalService::class)->setContext(
-                $this->draft(),
+                $draft,
                 $this->equipmentId === '' ? null : Equipment::query()->findOrFail((int) $this->equipmentId),
                 $this->purposeId === '' ? null : WithdrawalPurpose::query()->findOrFail((int) $this->purposeId),
                 $this->remarks,
@@ -163,11 +165,55 @@ class Withdrawal extends Component
         } catch (WithdrawalRefused $refused) {
             $this->addError('equipmentId', $refused->getMessage());
             $this->dispatch('station-focus', field: 'equipmentId');
+            // The three fields are saved together; none of them took, so the screen reverts to
+            // match what the draft still holds rather than keep showing a value that was refused
+            // (finding C1: what the screen shows must be what is saved).
+            $this->equipmentId = (string) ($draft->equipment_id ?? '');
+            $this->purposeId = (string) ($draft->purpose_id ?? '');
+            $this->remarks = (string) ($draft->remarks ?? '');
 
             return;
         }
 
         $this->forget();
+    }
+
+    /**
+     * Equipment and purpose save on change, remarks on blur (see the Blade's wire:model
+     * modifiers) — never on a separate Save click, so the draft can never disagree with what the
+     * screen shows (finding C1). Guarded against a no-op resync: Livewire re-sends every deferred
+     * property with the next request regardless of which field actually changed, and saveContext()
+     * unconditionally clears the identification, so calling it on a value that did not change
+     * would silently wipe a just-completed scan.
+     */
+    public function updatedEquipmentId(): void
+    {
+        $this->autoSaveContext();
+    }
+
+    public function updatedPurposeId(): void
+    {
+        $this->autoSaveContext();
+    }
+
+    public function updatedRemarks(): void
+    {
+        $this->autoSaveContext();
+    }
+
+    private function autoSaveContext(): void
+    {
+        $draft = $this->draft();
+
+        $unchanged = $this->equipmentId === (string) ($draft->equipment_id ?? '')
+            && $this->purposeId === (string) ($draft->purpose_id ?? '')
+            && trim($this->remarks) === (string) ($draft->remarks ?? '');
+
+        if ($unchanged) {
+            return;
+        }
+
+        $this->saveContext();
     }
 
     /**

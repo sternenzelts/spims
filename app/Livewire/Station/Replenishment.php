@@ -14,7 +14,6 @@ use App\Livewire\Concerns\ActsAsSignedInUser;
 use App\Models\Part;
 use App\Models\StockTransaction;
 use App\Models\StockTransactionLine;
-use Carbon\CarbonImmutable;
 use Flux\Flux;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
@@ -51,9 +50,11 @@ class Replenishment extends Component
         $draft = $this->draft();
         $this->supplier = (string) ($draft->supplier ?? '');
         $this->referenceNo = (string) ($draft->reference_no ?? '');
-        $this->receivedOn = CarbonImmutable::now()
-            ->setTimezone(app(InstallSettings::class)->timezone())
-            ->toDateString();
+        // The draft's own occurred_at, not "today": a draft can be reopened after midnight
+        // (NFR-SPIMS-007), and showing today here would silently re-date it the moment autosave
+        // next runs (wave-1's carried note). A brand-new draft's occurred_at is its creation time,
+        // which is today, so this is also correct on a first visit.
+        $this->receivedOn = $this->occurredOnDate($draft);
     }
 
     public function saveDelivery(): void
@@ -61,15 +62,68 @@ class Replenishment extends Component
         $this->authorize(Permission::ReplenishmentsRecord);
         $this->resetErrorBag();
 
+        $draft = $this->draft();
+
         try {
-            app(ReplenishmentService::class)->setDelivery($this->draft(), $this->supplier, $this->referenceNo, $this->receivedOn);
+            app(ReplenishmentService::class)->setDelivery($draft, $this->supplier, $this->referenceNo, $this->receivedOn);
         } catch (ReplenishmentRefused $refused) {
             $this->addError('receivedOn', $refused->getMessage());
+            // The three fields save together; none of them took, so the screen reverts to match
+            // what the draft still holds (finding C1).
+            $this->supplier = (string) ($draft->supplier ?? '');
+            $this->referenceNo = (string) ($draft->reference_no ?? '');
+            $this->receivedOn = $this->occurredOnDate($draft);
 
             return;
         }
 
         $this->forget();
+    }
+
+    /**
+     * The supplier and reference save on blur (see the Blade's wire:model.blur), never on a
+     * separate Save click, so the draft can never disagree with what the screen shows (finding
+     * C1). setDelivery() refuses unless both are present together, so autosave waits for both
+     * rather than showing "reference required" the moment the supplier field alone is blurred and
+     * reverting what was just typed there.
+     */
+    public function updatedSupplier(): void
+    {
+        $this->autoSaveDelivery();
+    }
+
+    public function updatedReferenceNo(): void
+    {
+        $this->autoSaveDelivery();
+    }
+
+    public function updatedReceivedOn(): void
+    {
+        $this->autoSaveDelivery();
+    }
+
+    private function autoSaveDelivery(): void
+    {
+        if (trim($this->supplier) === '' || trim($this->referenceNo) === '') {
+            return;
+        }
+
+        $draft = $this->draft();
+
+        $unchanged = trim($this->supplier) === (string) ($draft->supplier ?? '')
+            && Str::upper(trim($this->referenceNo)) === (string) ($draft->reference_no ?? '')
+            && $this->receivedOn === $this->occurredOnDate($draft);
+
+        if ($unchanged) {
+            return;
+        }
+
+        $this->saveDelivery();
+    }
+
+    private function occurredOnDate(StockTransaction $draft): string
+    {
+        return $draft->occurred_at->setTimezone(app(InstallSettings::class)->timezone())->toDateString();
     }
 
     public function enterPart(): void
@@ -144,6 +198,17 @@ class Replenishment extends Component
         $this->resetErrorBag();
 
         $draft = $this->draft();
+
+        // Autosave waits for both supplier and reference to be non-empty (above), so clearing a
+        // saved one back to blank and confirming without ever refilling it would otherwise post
+        // whatever the draft last held while the screen showed something else entirely.
+        if (trim($this->supplier) !== (string) ($draft->supplier ?? '')
+            || Str::upper(trim($this->referenceNo)) !== (string) ($draft->reference_no ?? '')) {
+            $this->addError('draft', __('The supplier or reference on screen has not been saved. Fill both in before confirming.'));
+            $this->dispatch('station-focus', field: 'supplier');
+
+            return;
+        }
 
         try {
             app(ReplenishmentService::class)->guardReadyToConfirm($draft);

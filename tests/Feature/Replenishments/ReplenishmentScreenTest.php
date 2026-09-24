@@ -10,6 +10,7 @@ use App\Livewire\Station\Replenishment;
 use App\Models\StockTransaction;
 use Carbon\CarbonImmutable;
 use Livewire\Livewire;
+use Spatie\Permission\PermissionRegistrar;
 
 beforeEach(function () {
     configureInstall();
@@ -83,11 +84,12 @@ it('warns about a line that goes over the maximum level and still confirms', fun
 });
 
 it('refuses a delivery received on an earlier day and names the backdated entry screen', function () {
+    // Wave 2: no explicit Save click needed — the last field set (receivedOn) autosaves once
+    // supplier and reference are both already present, and is the one that gets refused here.
     Livewire::actingAs($this->custodian)->test(Replenishment::class)
         ->set('supplier', 'Pacific Bearings Inc.')
         ->set('referenceNo', 'DR-1')
         ->set('receivedOn', CarbonImmutable::parse($this->today)->subDay()->toDateString())
-        ->call('saveDelivery')
         ->assertHasErrors('receivedOn');
 });
 
@@ -105,9 +107,11 @@ it('refuses to confirm after midnight a delivery saved the day before, even afte
 
     $this->travelTo(CarbonImmutable::parse('2026-09-25 00:10:00', 'Asia/Manila'));
 
-    // A reload fills the date field with the new day; what was saved still says yesterday.
+    // Wave 2: a reload now shows the date that was actually saved, not today (mount() reads
+    // occurred_at, not now()) — the very divergence this fix wave closes. It still refuses to
+    // confirm: the delivery is genuinely a day old now, and that needs a backdated entry.
     Livewire::actingAs($this->custodian)->test(Replenishment::class)
-        ->assertSet('receivedOn', '2026-09-25')
+        ->assertSet('receivedOn', '2026-09-24')
         ->call('confirm')
         ->assertHasErrors('draft')
         ->assertSee('backdated entry');
@@ -166,4 +170,92 @@ it('renders the delivery screen\'s errors once, not once from the field and once
         ->html();
 
     expect(substr_count($html, __('No spare part has that number. Pick one from the matches below.')))->toBe(1);
+});
+
+// --- Wave 2: what the screen shows must be what is saved (review C finding 1, item 1) --------
+
+it('saves the reference as it changes, without a Save click', function () {
+    Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-00921')
+        ->set('receivedOn', $this->today)
+        ->call('saveDelivery')
+        // Changed on screen, never followed by an explicit Save click.
+        ->set('referenceNo', 'DR-00999')
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart');
+
+    $draft = app(ReplenishmentService::class)->openDraft($this->custodian);
+
+    expect($draft->reference_no)->toBe('DR-00999');
+});
+
+it('does not autosave the delivery until both supplier and reference are filled', function () {
+    Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->assertHasNoErrors();
+
+    $draft = app(ReplenishmentService::class)->openDraft($this->custodian);
+
+    expect($draft->supplier)->toBeNull();
+});
+
+it('does not touch the draft when a field resyncs to the value it already had', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-00921')
+        ->set('receivedOn', $this->today)
+        ->call('saveDelivery');
+
+    $before = app(ReplenishmentService::class)->openDraft($this->custodian)->updated_at;
+
+    $this->travel(1)->seconds();
+    $component->set('supplier', 'Pacific Bearings Inc.');
+
+    expect(app(ReplenishmentService::class)->openDraft($this->custodian)->updated_at->equalTo($before))->toBeTrue();
+});
+
+it('reverts the delivery fields to the draft\'s values when the change is refused', function () {
+    Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-1')
+        ->set('receivedOn', $this->today)
+        ->call('saveDelivery')
+        ->set('receivedOn', CarbonImmutable::parse($this->today)->subDay()->toDateString())
+        ->assertHasErrors('receivedOn')
+        // Refused: the screen goes back to what the draft still holds, not the rejected value.
+        ->assertSet('receivedOn', $this->today);
+});
+
+it('refuses to confirm when the reference on screen was cleared and never re-saved', function () {
+    Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-1')
+        ->set('receivedOn', $this->today)
+        ->call('saveDelivery')
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        // Cleared back to blank: autosave never runs while it's empty, so the draft still holds
+        // "DR-1" while the screen shows nothing.
+        ->set('referenceNo', '')
+        ->call('confirm')
+        ->assertHasErrors('draft');
+
+    expect(StockTransaction::query()
+        ->where('type', TransactionType::Replenishment)
+        ->where('status', TransactionStatus::Completed)
+        ->count())->toBe(0);
+});
+
+it('re-checks the permission when the supplier is changed after roles are revoked', function () {
+    // Autosave waits for both fields, so setting the reference alone (still authorized) never
+    // reaches setDelivery() — nothing to authorize yet, matching the "don't refuse what nobody
+    // is trying to save" behaviour above. The write is attempted once supplier follows it.
+    $screen = Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('referenceNo', 'DR-1');
+
+    $this->custodian->syncRoles([]);
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+    $screen->set('supplier', 'Pacific Bearings Inc.')->assertForbidden();
 });

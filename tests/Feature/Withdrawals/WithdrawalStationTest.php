@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
+use Spatie\Permission\PermissionRegistrar;
 
 beforeEach(function () {
     configureInstall();
@@ -619,4 +620,81 @@ it('renders each error once, not once from the field and once from a separate <f
         ->html();
 
     expect(substr_count($html, __('No spare part has that number. Pick one from the matches below.')))->toBe(1);
+});
+
+// --- Wave 2: what the screen shows must be what is saved (review C finding 1, item 1) --------
+
+it('saves equipment and purpose as they change, without a Save click, clearing the identification', function () {
+    $otherPurpose = WithdrawalPurpose::query()
+        ->where('is_active', true)
+        ->where('requires_remarks', false)
+        ->where('id', '!=', $this->purpose->id)
+        ->orderBy('sort_order')
+        ->firstOrFail();
+
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->set('badge', 'A1234BCDE')
+        ->call('scan')
+        ->assertSeeHtml('wire:click="clearIdentification"');
+
+    // Changed on screen, never followed by an explicit Save click.
+    $component->set('purposeId', (string) $otherPurpose->id);
+
+    $draft = app(WithdrawalService::class)->openDraft($this->custodian);
+
+    expect($draft->purpose_id)->toBe($otherPurpose->id)
+        ->and($draft->personnel_id)->toBeNull();
+
+    // The screen agrees: the callout is gone, because the identification really was cleared, not
+    // just because the property changed under it.
+    $component->assertDontSeeHtml('wire:click="clearIdentification"');
+});
+
+it('does not touch the draft, or the identification, when a field resyncs to the value it already had', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->set('badge', 'A1234BCDE')
+        ->call('scan')
+        ->assertSeeHtml('wire:click="clearIdentification"');
+
+    // Livewire re-sends every deferred property with the next request regardless of which one
+    // the browser actually changed — e.g. tabbing through Remarks without typing anything. That
+    // must not run setContext() again and wipe the scan just taken.
+    $component->set('remarks', '');
+
+    expect(app(WithdrawalService::class)->openDraft($this->custodian)->personnel_id)->not->toBeNull();
+    $component->assertSeeHtml('wire:click="clearIdentification"');
+});
+
+it('reverts equipment and purpose to the draft\'s values when the change is refused', function () {
+    $inactive = Equipment::factory()->create(['code' => 'OLD-01', 'is_active' => false]);
+
+    Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->call('saveContext')
+        ->set('equipmentId', (string) $inactive->id)
+        ->assertHasErrors('equipmentId')
+        // Refused: the screen goes back to what the draft still holds, not the rejected value.
+        ->assertSet('equipmentId', (string) $this->equipment->id);
+
+    expect(app(WithdrawalService::class)->openDraft($this->custodian)->equipment_id)->toBe($this->equipment->id);
+});
+
+it('re-checks the permission when equipment is changed after roles are revoked', function () {
+    $screen = Livewire::actingAs($this->custodian)->test(Withdrawal::class);
+
+    $this->custodian->syncRoles([]);
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+    $screen->set('equipmentId', (string) $this->equipment->id)->assertForbidden();
 });

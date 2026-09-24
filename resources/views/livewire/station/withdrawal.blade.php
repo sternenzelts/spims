@@ -84,23 +84,24 @@
         </flux:table.rows>
     </flux:table>
 
+    {{-- Equipment and purpose save the moment they change; remarks save on blur. No Save button:
+         one would imply an unsaved state that can no longer exist (finding C1). --}}
     <div class="mb-6 flex flex-wrap items-end gap-4">
-        <flux:select wire:model="equipmentId" :label="__('Equipment')" class="max-w-xs" data-focus="equipmentId">
+        <flux:select wire:model.live="equipmentId" :label="__('Equipment')" class="max-w-xs" data-focus="equipmentId">
             <flux:select.option value="">{{ __('Choose equipment') }}</flux:select.option>
             @foreach ($this->equipmentOptions as $option)
                 <flux:select.option :value="$option->id">{{ $option->code }} — {{ $option->name }}</flux:select.option>
             @endforeach
         </flux:select>
 
-        <flux:select wire:model="purposeId" :label="__('Purpose')" class="max-w-xs" data-focus="purposeId">
+        <flux:select wire:model.live="purposeId" :label="__('Purpose')" class="max-w-xs" data-focus="purposeId">
             <flux:select.option value="">{{ __('Choose a purpose') }}</flux:select.option>
             @foreach ($this->purposeOptions as $option)
                 <flux:select.option :value="$option->id">{{ $option->name }}</flux:select.option>
             @endforeach
         </flux:select>
 
-        <flux:input wire:model="remarks" :label="__('Remarks')" class="max-w-sm" data-focus="remarks" />
-        <flux:button wire:click="saveContext">{{ __('Save') }}</flux:button>
+        <flux:input wire:model.blur="remarks" :label="__('Remarks')" class="max-w-sm" data-focus="remarks" />
     </div>
     {{-- No separate <flux:error> here either: it would double the labelled equipment field's own. --}}
 

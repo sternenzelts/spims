@@ -3,11 +3,13 @@
 
     <flux:error name="draft" />
 
+    {{-- Supplier, reference and date save on blur, together, once both supplier and reference are
+         filled. No Save button: one would imply an unsaved state that can no longer exist
+         (finding C1). --}}
     <div class="mb-6 flex flex-wrap items-end gap-4">
-        <flux:input wire:model="supplier" :label="__('Supplier')" class="max-w-sm" autofocus />
-        <flux:input wire:model="referenceNo" :label="__('DR or PO reference')" class="max-w-xs" />
-        <flux:input wire:model="receivedOn" type="date" :label="__('Date received')" class="max-w-xs" />
-        <flux:button wire:click="saveDelivery">{{ __('Save delivery') }}</flux:button>
+        <flux:input wire:model.blur="supplier" :label="__('Supplier')" class="max-w-sm" autofocus data-focus="supplier" />
+        <flux:input wire:model.blur="referenceNo" :label="__('DR or PO reference')" class="max-w-xs" />
+        <flux:input wire:model.blur="receivedOn" type="date" :label="__('Date received')" class="max-w-xs" />
     </div>
     {{-- No separate <flux:error> here: the labelled date field above already renders its own. --}}
 
