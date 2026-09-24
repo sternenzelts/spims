@@ -17,6 +17,7 @@ use App\Models\StockTransaction;
 use App\Models\User;
 use App\Models\WithdrawalOverride;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 
 beforeEach(function () {
@@ -196,6 +197,35 @@ it('reports a discrepancy whether the override was posted or discarded', functio
     'posted' => [null, true],
     'discarded' => ['10', false],
 ]);
+
+it('announces no discrepancy when the caller rolls the posting back', function () {
+    $announced = 0;
+    Event::listen(StockDiscrepancyReported::class, function () use (&$announced): void {
+        $announced++;
+    });
+    $part = partWithStock('3');
+    $draft = StockTransaction::factory()->withLines([[$part, '5']])->create(['custodian_user_id' => $this->custodian->id]);
+    authorise($draft, $part, '8', '3');
+
+    try {
+        DB::transaction(function () use ($draft): void {
+            $this->ledger->completeWithOverrides($draft, $this->custodian);
+
+            throw new RuntimeException('The caller failed after posting.');
+        });
+    } catch (RuntimeException) {
+        // Expected: the caller's transaction rolled back, taking the posting with it.
+    }
+
+    expect($announced)->toBe(0)
+        ->and(onHand($part))->toBe('3.000')
+        ->and(StockTransaction::query()->where('type', TransactionType::Adjustment)->count())->toBe(0);
+
+    // The listener does hear a posting that stays committed, so the zero above is not vacuous.
+    $this->ledger->completeWithOverrides($draft, $this->custodian);
+
+    expect($announced)->toBe(1);
+});
 
 it('posts one adjustment per overridden line, each with its own reason', function () {
     $bearing = partWithStock('1');
