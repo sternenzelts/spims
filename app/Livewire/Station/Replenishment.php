@@ -86,7 +86,11 @@ class Replenishment extends Component
         $part = Part::query()->whereRaw('lower(part_number) = ?', [Str::lower($entry)])->first();
 
         if (! $part instanceof Part) {
-            $this->addError('partEntry', __('No spare part has that number. Pick one from the matches below, or create it on the spare parts screen.'));
+            // Custodians can't reach /parts/create (Ruling C), so don't point them at a dead end.
+            $this->addError('partEntry', $this->actor()->can('create', Part::class)
+                ? __('No spare part has that number. Pick one from the matches below, or create it on the spare parts screen.')
+                : __('No spare part has that number. Pick one from the matches below.'));
+            $this->dispatch('station-focus', field: 'partEntry');
 
             return;
         }
@@ -108,6 +112,7 @@ class Replenishment extends Component
             );
         } catch (ReplenishmentRefused $refused) {
             $this->addError('partEntry', $refused->getMessage());
+            $this->dispatch('station-focus', field: 'partEntry');
 
             return;
         }
@@ -116,6 +121,7 @@ class Replenishment extends Component
         $this->quantity = '1';
         $this->unitCost = '';
         $this->forget();
+        $this->dispatch('station-focus', field: 'partEntry');
     }
 
     public function removeLine(int $lineId): void

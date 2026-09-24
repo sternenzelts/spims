@@ -125,3 +125,45 @@ it('adds a part on Enter', function () {
     Livewire::actingAs($this->custodian)->test(Replenishment::class)
         ->assertSeeHtml('wire:keydown.enter.prevent="enterPart"');
 });
+
+// --- Wave 2: focus follows the work (walk W1), applied to the delivery screen's part field ---
+
+it('sends focus to the part field after adding a part, and after a refusal', function () {
+    Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->assertDispatched('station-focus', field: 'partEntry');
+
+    Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('partEntry', 'nothing like this exists')
+        ->call('enterPart')
+        ->assertHasErrors('partEntry')
+        ->assertDispatched('station-focus', field: 'partEntry');
+});
+
+// --- Wave 2: hide the dead-end "New spare part" link from whoever can't use it (walk W5) -----
+
+it('shows the New spare part link only to someone who can actually create one', function () {
+    Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->assertDontSee(__('New spare part'))
+        ->set('partEntry', 'nothing like this exists')
+        ->call('enterPart')
+        ->assertDontSee('create it on the spare parts screen');
+
+    Livewire::actingAs(userWithRoles(Role::Supervisor))->test(Replenishment::class)
+        ->assertSee(__('New spare part'))
+        ->set('partEntry', 'nothing like this exists')
+        ->call('enterPart')
+        ->assertSee('create it on the spare parts screen');
+});
+
+// --- Wave 2: no error message is rendered twice (item 10) -------------------------------------
+
+it('renders the delivery screen\'s errors once, not once from the field and once from a separate <flux:error>', function () {
+    $html = Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('partEntry', 'nothing like this exists')
+        ->call('enterPart')
+        ->html();
+
+    expect(substr_count($html, __('No spare part has that number. Pick one from the matches below.')))->toBe(1);
+});

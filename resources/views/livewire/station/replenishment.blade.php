@@ -9,7 +9,7 @@
         <flux:input wire:model="receivedOn" type="date" :label="__('Date received')" class="max-w-xs" />
         <flux:button wire:click="saveDelivery">{{ __('Save delivery') }}</flux:button>
     </div>
-    <flux:error name="receivedOn" />
+    {{-- No separate <flux:error> here: the labelled date field above already renders its own. --}}
 
     @if ($this->duplicate)
         <flux:callout variant="warning" icon="exclamation-triangle" class="mb-6">
@@ -36,13 +36,18 @@
             :label="__('Part number')"
             :placeholder="__('Scan or type, then press Enter')"
             class="max-w-sm"
+            data-focus="partEntry"
         />
         <flux:input wire:model="quantity" :label="__('Quantity received')" class="max-w-32" inputmode="decimal" />
         <flux:input wire:model="unitCost" :label="__('Unit cost')" class="max-w-32" inputmode="decimal" />
         <flux:button wire:click="enterPart">{{ __('Add') }}</flux:button>
-        <flux:button variant="subtle" :href="route('parts.create')" wire:navigate>{{ __('New spare part') }}</flux:button>
+        {{-- 403 for a Custodian (Ruling C): shown only to whoever can actually use it. --}}
+        @can('create', \App\Models\Part::class)
+            <flux:button variant="subtle" :href="route('parts.create')" wire:navigate>{{ __('New spare part') }}</flux:button>
+        @endcan
     </div>
-    <flux:error name="partEntry" />
+    {{-- No separate <flux:error> here: the labelled field above already renders its own
+         (flux/with-field.blade.php), so a second one would show the same message twice. --}}
 
     @if ($this->matches->isNotEmpty())
         <div class="mb-6 space-y-2">
@@ -56,11 +61,11 @@
 
     <flux:table class="mb-6">
         <flux:table.columns>
-            <flux:table.column>{{ __('Part number') }}</flux:table.column>
+            <flux:table.column class="w-28">{{ __('Part number') }}</flux:table.column>
             <flux:table.column>{{ __('Description') }}</flux:table.column>
-            <flux:table.column align="end">{{ __('Quantity') }}</flux:table.column>
-            <flux:table.column align="end">{{ __('Unit cost') }}</flux:table.column>
-            <flux:table.column />
+            <flux:table.column class="w-28" align="end">{{ __('Quantity') }}</flux:table.column>
+            <flux:table.column class="w-24" align="end">{{ __('Unit cost') }}</flux:table.column>
+            <flux:table.column class="w-24" />
         </flux:table.columns>
 
         <flux:table.rows>
