@@ -387,8 +387,46 @@ it('shows the transaction record the requirement lists, with the badge masked', 
         ->assertSee('EMP-0042')
         ->assertSee('BRG-6204')
         ->assertSee('Deep groove ball bearing')
-        ->assertSee('CNC-01')
+        // Written the way the station writes it elsewhere, not "CNC-01 CNC lathe 1" with no
+        // separator (walk minor).
+        ->assertSee("{$this->equipment->code} — {$this->equipment->name}")
         ->assertSee($this->person->fresh()->badge_uid_masked)
+        ->assertDontSee('A1234BCDE')
+        // The remaining balance has its unit, as the quantity already does (walk minor).
+        // Quantity::display() strips trailing zeros, so 10 - 4 reads "6", not "6.000".
+        ->assertSee("6 {$this->part->unit_of_measure}", false);
+});
+
+it('names the supervisor and reason on a manually-identified receipt, with no badge line at all', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->call('saveContext')
+        ->call('requestManualIdentification')
+        ->set('manualPersonnelId', (string) $this->person->id)
+        ->set('manualReason', 'Left it at home today')
+        ->set('supervisorEmail', 'rita@microtech.test')
+        ->set('supervisorPassword', 'counter-secret')
+        ->call('identifyManually')
+        ->assertHasNoErrors()
+        ->call('confirm')
+        ->assertHasNoErrors();
+
+    $completed = StockTransaction::query()
+        ->where('type', TransactionType::Withdrawal)
+        ->where('status', TransactionStatus::Completed)
+        ->sole();
+
+    $component->assertRedirect(route('station.receipt', ['transaction' => $completed->id]));
+
+    $this->actingAs($this->custodian)
+        ->get(route('station.receipt', ['transaction' => $completed->id]))
+        ->assertOk()
+        ->assertSee("Identified manually by {$this->supervisor->name}, reason: Left it at home today")
+        ->assertDontSee(__('Badge'))
+        ->assertDontSee($this->person->fresh()->badge_uid_masked)
         ->assertDontSee('A1234BCDE');
 });
 

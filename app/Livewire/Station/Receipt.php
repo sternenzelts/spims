@@ -33,7 +33,10 @@ class Receipt extends Component
     public function transaction(): StockTransaction
     {
         return StockTransaction::query()
-            ->with(['personnel', 'equipment', 'purpose', 'custodian', 'lines.part', 'movements'])
+            ->with([
+                'personnel', 'equipment', 'purpose', 'custodian', 'identificationAuthorisedBy',
+                'lines.part', 'movements',
+            ])
             ->findOrFail($this->transactionId);
     }
 }

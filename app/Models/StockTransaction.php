@@ -47,6 +47,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property CarbonImmutable $updated_at
  * @property-read User $custodian
  * @property-read Personnel|null $personnel
+ * @property-read User|null $identificationAuthorisedBy
  * @property-read Equipment|null $equipment
  * @property-read WithdrawalPurpose|null $purpose
  * @property-read Collection<int, StockTransactionLine> $lines
@@ -94,6 +95,17 @@ class StockTransaction extends Model
     public function personnel(): BelongsTo
     {
         return $this->belongsTo(Personnel::class);
+    }
+
+    /**
+     * The supervisor who identified the personnel by hand (identification_method
+     * supervisor_manual), named on the receipt alongside identification_reason.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function identificationAuthorisedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'identification_authorised_by_user_id');
     }
 
     /**
