@@ -138,6 +138,9 @@
     <flux:modal name="supervisor-override" class="md:w-96">
         <form wire:submit="authoriseOverride" class="space-y-6">
             <flux:heading size="lg">{{ __('Supervisor override') }}</flux:heading>
+            @if ($this->overridePart)
+                <flux:text variant="strong">{{ $this->overridePart->part_number }} — {{ $this->overridePart->description }}</flux:text>
+            @endif
             <flux:text>{{ __('Enter the quantity counted on the shelf. The adjustment is recorded when the withdrawal is confirmed.') }}</flux:text>
 
             <flux:input wire:model="verifiedQty" :label="__('Verified quantity on the shelf')" inputmode="decimal" />

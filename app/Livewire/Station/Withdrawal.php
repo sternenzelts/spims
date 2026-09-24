@@ -28,6 +28,7 @@ use Flux\Flux;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
@@ -55,6 +56,8 @@ class Withdrawal extends Component
 
     public string $badge = '';
 
+    /** Set only by requestOverride(): a crafted request must not retarget what the supervisor counts. */
+    #[Locked]
     public int $overridePartId = 0;
 
     public string $verifiedQty = '';
@@ -368,6 +371,16 @@ class Withdrawal extends Component
     public function review(): WithdrawalReview
     {
         return app(WithdrawalService::class)->review($this->draft());
+    }
+
+    /**
+     * The part the override dialog is authorising, named in the dialog so the supervisor sees what
+     * they are counting.
+     */
+    #[Computed]
+    public function overridePart(): ?Part
+    {
+        return Part::query()->find($this->overridePartId);
     }
 
     /**

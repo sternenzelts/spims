@@ -10,10 +10,12 @@ use App\Enums\TransactionStatus;
 use App\Enums\TransactionType;
 use App\Livewire\Station\Withdrawal;
 use App\Models\Equipment;
+use App\Models\Part;
 use App\Models\Personnel;
 use App\Models\StockTransaction;
 use App\Models\WithdrawalPurpose;
 use Illuminate\Support\Facades\Hash;
+use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
 
 beforeEach(function () {
@@ -145,6 +147,43 @@ it('lets a supervisor authorise an override at the counter', function () {
 
     expect($draft->overrides()->count())->toBe(1)
         ->and($draft->overrides()->firstOrFail()->authorised_by_user_id)->toBe($this->supervisor->id);
+});
+
+it('binds an override to the part it was requested for', function () {
+    $short = partWithStock('1', ['part_number' => 'BLT-100']);
+    $other = partWithStock('1', ['part_number' => 'BLT-200']);
+
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BLT-100')
+        ->set('quantity', '5')
+        ->call('enterPart')
+        ->call('requestOverride', $short->id);
+
+    expect(fn () => $component->set('overridePartId', $other->id))
+        ->toThrow(CannotUpdateLockedPropertyException::class);
+});
+
+it('names the part the supervisor is counting in the override dialog', function () {
+    partWithStock('1', ['part_number' => 'BLT-100', 'description' => 'V-belt A42']);
+    $short = Part::query()->where('part_number', 'BLT-100')->sole();
+
+    $html = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BLT-100')
+        ->set('quantity', '5')
+        ->call('enterPart')
+        ->call('requestOverride', $short->id)
+        ->html();
+
+    // The heading appears in the dialog alone, so the part named between it and the dialog's first
+    // field is named in the dialog. Livewire has no assertSeeInOrder of its own: Laravel's reads the
+    // JSON response, where the dash is escaped.
+    $heading = strpos($html, 'Supervisor override');
+    $part = strpos($html, 'BLT-100 — V-belt A42');
+    $field = strpos($html, 'Verified quantity on the shelf');
+
+    expect($heading)->toBeInt()
+        ->and($part)->toBeInt()->toBeGreaterThan($heading)
+        ->and($field)->toBeInt()->toBeGreaterThan($part);
 });
 
 it('refuses an override on wrong supervisor credentials and never keeps the password', function () {
