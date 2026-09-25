@@ -79,13 +79,21 @@ class Replenishment extends Component
             app(ReplenishmentService::class)->setDelivery($draft, $this->supplier, $this->referenceNo, $this->receivedOn);
         } catch (ReplenishmentRefused $refused) {
             $this->addError('receivedOn', $refused->getMessage());
-            // The three fields save together; none of them took, so the screen reverts to match
-            // what the draft still holds (finding C1).
-            $this->supplier = (string) ($draft->supplier ?? '');
-            $this->referenceNo = (string) ($draft->reference_no ?? '');
-            $this->receivedOn = $this->occurredOnDate($draft);
+            // Revert only the field the refusal is actually about (re-review round 2):
+            // setDelivery() checks supplier, then reference, then the date — in that order, and
+            // never revisits an earlier one once it passes — so by elimination, a refusal reached
+            // while both are already non-empty here can only be about the date. Reverting all
+            // three regardless — as this used to — silently wiped a still-valid supplier or
+            // reference just typed, ordinary work when the date happens to be set first.
+            if (trim($this->supplier) === '') {
+                $this->supplier = (string) ($draft->supplier ?? '');
+            } elseif (trim($this->referenceNo) === '') {
+                $this->referenceNo = (string) ($draft->reference_no ?? '');
+            } else {
+                $this->receivedOn = $this->occurredOnDate($draft);
+            }
             // A Confirm click bundled into this same request (re-review item 1) must not proceed
-            // on the strength of the value just reverted above.
+            // on the strength of a value just reverted above.
             $this->autoSaveRefused = true;
 
             return;

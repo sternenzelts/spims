@@ -227,6 +227,35 @@ it('reverts the delivery fields to the draft\'s values when the change is refuse
         ->assertSet('receivedOn', $this->today);
 });
 
+it('does not wipe a still-typed supplier and reference when only the date is refused', function () {
+    // Ordinary order of work: the date first — a genuinely earlier day, the refused case — then
+    // the supplier and the reference. Autosave waits for both of those before it ever attempts a
+    // save, so this is the first save attempt, and it fails on the date alone.
+    $component = Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('receivedOn', CarbonImmutable::parse($this->today)->subDay()->toDateString())
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-1');
+
+    $component->assertHasErrors('receivedOn')
+        // The date reverts — it was the actual problem...
+        ->assertSet('receivedOn', $this->today)
+        // ...but the supplier and reference just typed survive on screen.
+        ->assertSet('supplier', 'Pacific Bearings Inc.')
+        ->assertSet('referenceNo', 'DR-1');
+
+    // Never actually saved (setDelivery() refused before writing anything), so confirming now
+    // must refuse rather than post while the draft still holds nothing for either.
+    $component->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->call('confirm')
+        ->assertHasErrors('draft');
+
+    expect(StockTransaction::query()
+        ->where('type', TransactionType::Replenishment)
+        ->where('status', TransactionStatus::Completed)
+        ->count())->toBe(0);
+});
+
 it('refuses to confirm when the reference on screen was cleared and never re-saved', function () {
     Livewire::actingAs($this->custodian)->test(Replenishment::class)
         ->set('supplier', 'Pacific Bearings Inc.')

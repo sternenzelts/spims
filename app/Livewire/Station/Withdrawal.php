@@ -164,25 +164,28 @@ class Withdrawal extends Component
         $this->resetErrorBag();
 
         $draft = $this->draft();
+        $equipment = $this->equipmentId === '' ? null : Equipment::query()->findOrFail((int) $this->equipmentId);
+        $purpose = $this->purposeId === '' ? null : WithdrawalPurpose::query()->findOrFail((int) $this->purposeId);
 
         try {
-            app(WithdrawalService::class)->setContext(
-                $draft,
-                $this->equipmentId === '' ? null : Equipment::query()->findOrFail((int) $this->equipmentId),
-                $this->purposeId === '' ? null : WithdrawalPurpose::query()->findOrFail((int) $this->purposeId),
-                $this->remarks,
-            );
+            app(WithdrawalService::class)->setContext($draft, $equipment, $purpose, $this->remarks);
         } catch (WithdrawalRefused $refused) {
             $this->addError('equipmentId', $refused->getMessage());
             $this->dispatch('station-focus', field: 'equipmentId');
-            // The three fields are saved together; none of them took, so the screen reverts to
-            // match what the draft still holds rather than keep showing a value that was refused
-            // (finding C1: what the screen shows must be what is saved).
-            $this->equipmentId = (string) ($draft->equipment_id ?? '');
-            $this->purposeId = (string) ($draft->purpose_id ?? '');
-            $this->remarks = (string) ($draft->remarks ?? '');
+            // Revert only the field the refusal is actually about (re-review round 2):
+            // guardActiveContext() refuses equipment or purpose independently for being Inactive,
+            // and never refuses remarks at all. Reverting all three regardless — as this used to —
+            // could silently wipe a still-valid equipment/purpose chosen, or remarks typed,
+            // together with the one that was actually refused in the same bundled request.
+            if ($equipment instanceof Equipment && ! $equipment->is_active) {
+                $this->equipmentId = (string) ($draft->equipment_id ?? '');
+            }
+
+            if ($purpose instanceof WithdrawalPurpose && ! $purpose->is_active) {
+                $this->purposeId = (string) ($draft->purpose_id ?? '');
+            }
             // A Confirm click bundled into this same request (re-review item 1) must not proceed
-            // on the strength of the value just reverted above.
+            // on the strength of a value just reverted above.
             $this->autoSaveRefused = true;
 
             return;

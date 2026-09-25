@@ -690,6 +690,37 @@ it('reverts equipment and purpose to the draft\'s values when the change is refu
     expect(app(WithdrawalService::class)->openDraft($this->custodian)->equipment_id)->toBe($this->equipment->id);
 });
 
+it('does not wipe a purpose chosen in the same request when only equipment is refused', function () {
+    $inactiveEquipment = Equipment::factory()->create(['code' => 'OLD-01', 'is_active' => false]);
+    $newPurpose = WithdrawalPurpose::query()
+        ->where('is_active', true)
+        ->where('id', '!=', $this->purpose->id)
+        ->orderBy('sort_order')
+        ->firstOrFail();
+
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart');
+
+    // One request, both fields changing together — Livewire bundles simultaneous property
+    // updates the same way it bundles a blur with the click that follows it (round 1's
+    // "bundled with Confirm" test used the identical technique for a property update plus a call;
+    // this is two property updates together).
+    $component->update(updates: [
+        'equipmentId' => (string) $inactiveEquipment->id,
+        'purposeId' => (string) $newPurpose->id,
+    ]);
+
+    // Equipment reverts — it was the actual problem — but the purpose chosen in the same request
+    // is never touched by the refusal, and its own updatedPurposeId() hook gets a chance to save
+    // it once equipment is no longer in the way.
+    $component->assertSet('equipmentId', '')
+        ->assertSet('purposeId', (string) $newPurpose->id);
+
+    expect(app(WithdrawalService::class)->openDraft($this->custodian)->purpose_id)
+        ->toBe($newPurpose->id);
+});
+
 it('re-checks the permission when equipment is changed after roles are revoked', function () {
     $screen = Livewire::actingAs($this->custodian)->test(Withdrawal::class);
 
