@@ -73,6 +73,16 @@ class Withdrawal extends Component
 
     public string $supervisorPassword = '';
 
+    /**
+     * Not a Livewire property: reset to false on every request rather than persisted, which is
+     * exactly what's needed here. Livewire applies property updates — running updatedEquipmentId()
+     * etc. — before invoking a requested action in the same request, so a mouse click that bundles
+     * an invalid edit's blur with an immediate Confirm click runs saveContext() first. Without this
+     * flag, confirm()'s own resetErrorBag() would wipe that refusal and confirm the withdrawal on
+     * the reverted-but-unremarked-on value. Set only by saveContext()'s catch, read only here.
+     */
+    private bool $autoSaveRefused = false;
+
     public function mount(): void
     {
         $this->authorize(Permission::WithdrawalsProcess);
@@ -171,6 +181,9 @@ class Withdrawal extends Component
             $this->equipmentId = (string) ($draft->equipment_id ?? '');
             $this->purposeId = (string) ($draft->purpose_id ?? '');
             $this->remarks = (string) ($draft->remarks ?? '');
+            // A Confirm click bundled into this same request (re-review item 1) must not proceed
+            // on the strength of the value just reverted above.
+            $this->autoSaveRefused = true;
 
             return;
         }
@@ -203,6 +216,11 @@ class Withdrawal extends Component
 
     private function autoSaveContext(): void
     {
+        // Re-review item 1 (Minor): the unchanged check below returns before saveContext() ever
+        // runs, so without this, a resynced-but-unchanged value would authorize nothing at all —
+        // the one interaction on this screen that wouldn't 403 a revoked custodian.
+        $this->authorize(Permission::WithdrawalsProcess);
+
         $draft = $this->draft();
 
         $unchanged = $this->equipmentId === (string) ($draft->equipment_id ?? '')
@@ -378,6 +396,17 @@ class Withdrawal extends Component
     public function confirm(): void
     {
         $this->authorize(Permission::WithdrawalsProcess);
+
+        // A property update bundled into this same request (a mouse click fires the field it
+        // leaves' blur before the click itself, and Livewire sends both together) was refused by
+        // saveContext() above. resetErrorBag() below would wipe that refusal, and completing the
+        // withdrawal now would use the value saveContext() already reverted away from — silently
+        // confirming on stale context with no error shown (re-review item 1). Leave it exactly as
+        // saveContext() left it and do nothing else.
+        if ($this->autoSaveRefused) {
+            return;
+        }
+
         $this->resetErrorBag();
 
         $draft = $this->draft();

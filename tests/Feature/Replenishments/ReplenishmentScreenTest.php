@@ -248,9 +248,10 @@ it('refuses to confirm when the reference on screen was cleared and never re-sav
 });
 
 it('re-checks the permission when the supplier is changed after roles are revoked', function () {
-    // Autosave waits for both fields, so setting the reference alone (still authorized) never
-    // reaches setDelivery() — nothing to authorize yet, matching the "don't refuse what nobody
-    // is trying to save" behaviour above. The write is attempted once supplier follows it.
+    // Autosave waits for both fields, so setting the reference alone (authorize() still passes,
+    // roles are intact) never reaches setDelivery() itself — nothing is written yet, matching the
+    // "don't save what nobody has finished typing" behaviour above. The write is attempted once
+    // supplier follows it.
     $screen = Livewire::actingAs($this->custodian)->test(Replenishment::class)
         ->set('referenceNo', 'DR-1');
 
@@ -258,4 +259,47 @@ it('re-checks the permission when the supplier is changed after roles are revoke
     app(PermissionRegistrar::class)->forgetCachedPermissions();
 
     $screen->set('supplier', 'Pacific Bearings Inc.')->assertForbidden();
+});
+
+// --- Fix round 1: re-review item 1 -------------------------------------------------------------
+
+it('re-checks the permission even when the resent value has not changed', function () {
+    $screen = Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-1')
+        ->set('receivedOn', $this->today);
+
+    $this->custodian->syncRoles([]);
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+    // Same values as already saved: the unchanged guard returns before saveDelivery() ever runs.
+    $screen->set('supplier', 'Pacific Bearings Inc.')->assertForbidden();
+});
+
+it('does not silently confirm when a refused autosave is bundled with Confirm delivery in the same request', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-1')
+        ->set('receivedOn', $this->today)
+        ->call('saveDelivery')
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart');
+
+    // One request carrying both an invalid property update and an action call, exactly as a mouse
+    // click bundles the blur of the field it leaves with the click that follows it.
+    $component->update(
+        calls: [['method' => 'confirm', 'params' => [], 'path' => '']],
+        updates: ['receivedOn' => CarbonImmutable::parse($this->today)->subDay()->toDateString()],
+    );
+
+    $component->assertHasErrors('receivedOn');
+
+    expect(StockTransaction::query()
+        ->where('type', TransactionType::Replenishment)
+        ->where('status', TransactionStatus::Completed)
+        ->count())->toBe(0);
+
+    expect(app(ReplenishmentService::class)->openDraft($this->custodian)->occurred_at
+        ->setTimezone(app(InstallSettings::class)->timezone())
+        ->toDateString())->toBe($this->today);
 });

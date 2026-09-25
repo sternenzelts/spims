@@ -43,6 +43,17 @@ class Replenishment extends Component
 
     public string $unitCost = '';
 
+    /**
+     * Not a Livewire property: reset to false on every request rather than persisted, which is
+     * exactly what's needed here. Livewire applies property updates — running updatedReceivedOn()
+     * etc. — before invoking a requested action in the same request, so a mouse click that bundles
+     * an invalid edit's blur with an immediate Confirm delivery click runs saveDelivery() first.
+     * Without this flag, confirm()'s own resetErrorBag() would wipe that refusal and confirm the
+     * delivery on the reverted-but-unremarked-on value. Set only by saveDelivery()'s catch, read
+     * only here.
+     */
+    private bool $autoSaveRefused = false;
+
     public function mount(): void
     {
         $this->authorize(Permission::ReplenishmentsRecord);
@@ -73,6 +84,9 @@ class Replenishment extends Component
             $this->supplier = (string) ($draft->supplier ?? '');
             $this->referenceNo = (string) ($draft->reference_no ?? '');
             $this->receivedOn = $this->occurredOnDate($draft);
+            // A Confirm click bundled into this same request (re-review item 1) must not proceed
+            // on the strength of the value just reverted above.
+            $this->autoSaveRefused = true;
 
             return;
         }
@@ -104,6 +118,11 @@ class Replenishment extends Component
 
     private function autoSaveDelivery(): void
     {
+        // Re-review item 1 (Minor): both early returns below skip saveDelivery() entirely, so
+        // without this, resending an unchanged (or still-incomplete) value would authorize nothing
+        // at all — the one interaction on this screen that wouldn't 403 a revoked custodian.
+        $this->authorize(Permission::ReplenishmentsRecord);
+
         if (trim($this->supplier) === '' || trim($this->referenceNo) === '') {
             return;
         }
@@ -195,6 +214,17 @@ class Replenishment extends Component
     public function confirm(): void
     {
         $this->authorize(Permission::ReplenishmentsRecord);
+
+        // A property update bundled into this same request (a mouse click fires the field it
+        // leaves' blur before the click itself, and Livewire sends both together) was refused by
+        // saveDelivery() above. resetErrorBag() below would wipe that refusal, and completing the
+        // delivery now would use the value saveDelivery() already reverted away from — silently
+        // confirming on stale context with no error shown (re-review item 1). Leave it exactly as
+        // saveDelivery() left it and do nothing else.
+        if ($this->autoSaveRefused) {
+            return;
+        }
+
         $this->resetErrorBag();
 
         $draft = $this->draft();

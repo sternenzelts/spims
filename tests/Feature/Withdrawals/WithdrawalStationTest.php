@@ -698,3 +698,47 @@ it('re-checks the permission when equipment is changed after roles are revoked',
 
     $screen->set('equipmentId', (string) $this->equipment->id)->assertForbidden();
 });
+
+// --- Fix round 1: re-review item 1 -------------------------------------------------------------
+
+it('re-checks the permission even when the resent value has not changed', function () {
+    $screen = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('equipmentId', (string) $this->equipment->id);
+
+    $this->custodian->syncRoles([]);
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+    // Same value as already saved: the unchanged guard returns before saveContext() ever runs.
+    $screen->set('equipmentId', (string) $this->equipment->id)->assertForbidden();
+});
+
+it('does not silently confirm when a refused autosave is bundled with Confirm in the same request', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Withdrawal::class)
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart')
+        ->set('equipmentId', (string) $this->equipment->id)
+        ->set('purposeId', (string) $this->purpose->id)
+        ->call('saveContext')
+        ->set('badge', 'A1234BCDE')
+        ->call('scan')
+        ->assertSeeHtml('wire:click="clearIdentification"');
+
+    $inactive = Equipment::factory()->create(['code' => 'OLD-01', 'is_active' => false]);
+
+    // One request carrying both an invalid property update and an action call, exactly as a mouse
+    // click bundles the blur of the field it leaves with the click that follows it.
+    $component->update(
+        calls: [['method' => 'confirm', 'params' => [], 'path' => '']],
+        updates: ['equipmentId' => (string) $inactive->id],
+    );
+
+    $component->assertHasErrors('equipmentId');
+
+    expect(StockTransaction::query()
+        ->where('type', TransactionType::Withdrawal)
+        ->where('status', TransactionStatus::Completed)
+        ->count())->toBe(0);
+
+    expect(app(WithdrawalService::class)->openDraft($this->custodian)->equipment_id)
+        ->toBe($this->equipment->id);
+});
