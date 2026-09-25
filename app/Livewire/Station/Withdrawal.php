@@ -161,7 +161,15 @@ class Withdrawal extends Component
     public function saveContext(): void
     {
         $this->authorize(Permission::WithdrawalsProcess);
-        $this->resetErrorBag();
+
+        // Once a sibling field's save has already been refused this request, leave its message
+        // alone: a later field succeeding in the same request must not silently wipe an earlier
+        // refusal nobody has seen yet (re-review round 3). $autoSaveRefused only ever becomes true
+        // below, and only within this one request (it is not a Livewire property, so it starts
+        // false again every time).
+        if (! $this->autoSaveRefused) {
+            $this->resetErrorBag();
+        }
 
         $draft = $this->draft();
         $equipment = $this->equipmentId === '' ? null : Equipment::query()->findOrFail((int) $this->equipmentId);

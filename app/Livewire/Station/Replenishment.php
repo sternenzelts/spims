@@ -71,7 +71,15 @@ class Replenishment extends Component
     public function saveDelivery(): void
     {
         $this->authorize(Permission::ReplenishmentsRecord);
-        $this->resetErrorBag();
+
+        // Once a sibling field's save has already been refused this request, leave its message
+        // alone: a later field succeeding in the same request (a mouse click bundles a field's
+        // blur with the one before it) must not silently wipe an earlier refusal nobody has seen
+        // yet (re-review round 3). $autoSaveRefused only ever becomes true below, and only within
+        // this one request (it is not a Livewire property, so it starts false again every time).
+        if (! $this->autoSaveRefused) {
+            $this->resetErrorBag();
+        }
 
         $draft = $this->draft();
 
@@ -239,10 +247,15 @@ class Replenishment extends Component
 
         // Autosave waits for both supplier and reference to be non-empty (above), so clearing a
         // saved one back to blank and confirming without ever refilling it would otherwise post
-        // whatever the draft last held while the screen showed something else entirely.
+        // whatever the draft last held while the screen showed something else entirely. Also
+        // covers the date: saveDelivery() is a public method a direct call can reach with a blank
+        // supplier and an out-of-range date, refusing on the supplier and reverting only that,
+        // leaving the date on screen disagreeing with the draft's own occurred_at with nothing
+        // else to catch it (re-review round 3).
         if (trim($this->supplier) !== (string) ($draft->supplier ?? '')
-            || Str::upper(trim($this->referenceNo)) !== (string) ($draft->reference_no ?? '')) {
-            $this->addError('draft', __('The supplier or reference on screen has not been saved. Fill both in before confirming.'));
+            || Str::upper(trim($this->referenceNo)) !== (string) ($draft->reference_no ?? '')
+            || $this->receivedOn !== $this->occurredOnDate($draft)) {
+            $this->addError('draft', __('The supplier, reference or date on screen has not been saved. Fix it before confirming.'));
             $this->dispatch('station-focus', field: 'supplier');
 
             return;

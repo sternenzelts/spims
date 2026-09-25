@@ -256,6 +256,66 @@ it('does not wipe a still-typed supplier and reference when only the date is ref
         ->count())->toBe(0);
 });
 
+// --- Fix round 3 -------------------------------------------------------------------------------
+
+it('does not let a sibling\'s successful save erase an earlier refusal\'s message in the same request', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-1')
+        ->set('receivedOn', $this->today)
+        ->call('saveDelivery');
+
+    // One request: the date changes to an earlier day (refused) and the supplier changes to
+    // something else (valid) at the same time — both fields use wire:model.blur, so an ordinary
+    // fast edit-then-click coalesces them into one request, exactly the mechanism round 1's own
+    // finding relied on.
+    $component->update(updates: [
+        'receivedOn' => CarbonImmutable::parse($this->today)->subDay()->toDateString(),
+        'supplier' => 'New Supplier Name',
+    ]);
+
+    // The date reverted — it was the actual problem — and the supplier's own, unrelated change
+    // saved successfully in the same request, but the date's refusal message must still be
+    // visible: a later, successful sibling save must not silently wipe it.
+    $component->assertHasErrors('receivedOn')
+        ->assertSet('receivedOn', $this->today);
+
+    expect(app(ReplenishmentService::class)->openDraft($this->custodian)->supplier)
+        ->toBe('New Supplier Name');
+});
+
+it('closes the date\'s own route around the mismatch guard, on a direct call that leaves it unreverted', function () {
+    $component = Livewire::actingAs($this->custodian)->test(Replenishment::class)
+        ->set('supplier', 'Pacific Bearings Inc.')
+        ->set('referenceNo', 'DR-1')
+        ->set('partEntry', 'BRG-6204')
+        ->call('enterPart');
+
+    // saveDelivery() is still a public method, reachable directly whether or not
+    // autoSaveDelivery()'s "wait for both" guard would have allowed it. Blanking the supplier and
+    // setting an out-of-range date, then calling it directly: setDelivery() refuses on the blank
+    // supplier first, before it ever looks at the date, so the catch's per-field revert restores
+    // only the supplier — the date is left on screen disagreeing with the draft's own occurred_at.
+    $component->set('supplier', '')
+        ->set('receivedOn', CarbonImmutable::parse($this->today)->subDay()->toDateString())
+        ->call('saveDelivery')
+        ->assertHasErrors('receivedOn');
+
+    $component->assertSet('supplier', 'Pacific Bearings Inc.') // reverted: the actual problem
+        ->assertSet('referenceNo', 'DR-1');                    // untouched: never the problem
+
+    // Without the date in the mismatch guard, confirm() would sail straight through
+    // guardReadyToConfirm() — supplier, reference and the draft's own occurred_at are all
+    // genuinely fine — and post using today, silently disagreeing with the date the screen still
+    // shows.
+    $component->call('confirm')->assertHasErrors('draft');
+
+    expect(StockTransaction::query()
+        ->where('type', TransactionType::Replenishment)
+        ->where('status', TransactionStatus::Completed)
+        ->count())->toBe(0);
+});
+
 it('refuses to confirm when the reference on screen was cleared and never re-saved', function () {
     Livewire::actingAs($this->custodian)->test(Replenishment::class)
         ->set('supplier', 'Pacific Bearings Inc.')
