@@ -28,7 +28,7 @@ it covers, and which decisions it must settle.
 | 2 | [Administration and Master Data](2026-09-19-spims-plan-02-administration-master-data.md) | manage users, install settings, purposes, locations, equipment, parts, stock levels and personnel with badges | FR-001–004, FR-018; NFR-004, 010 | M1, M3 | Merged 2026-09-19 (`c351dd3`) |
 | 2b | [Spare Part and Opening Balance Import](2026-09-20-spims-plan-02b-import.md) | import spare parts and opening balances from Excel or CSV, with a dry run | FR-005 | M1, M3 | Merged 2026-09-20 (`49c41e9`) |
 | 3 | [Withdrawal and Replenishment at the Station](2026-09-23-spims-plan-03-withdrawal-replenishment.md) | issue parts with the scan-last flow, including overrides and manual identification; receive stock | FR-006–009; FR-016 (lookup); NFR-006, 007 (drafts), 009 | M2, M3 | Merged 2026-09-25 (`c7918b9`) |
-| 4 | Corrections and Counting | adjust stock, reverse transactions, enter paper-fallback transactions, run physical counts | FR-010–013 | M3, M6 | Outline |
+| 4 | [Corrections and Counting](2026-09-25-spims-plan-04-corrections-counting.md) | adjust stock, reverse transactions, enter paper-fallback transactions, run physical counts | FR-010–013 | M3, M6 | Written 2026-09-25, not yet executed |
 | 5 | Analytics, Prediction, Alerts and Dashboard | see consumption, depletion and predicted stock-outs; receive and acknowledge alerts; use the dashboard | FR-014, FR-015, §10 notifications, FR-017 (dashboard) | M4 | Outline |
 | 6 | Reports and Exports | run reports A–K and export them; view movement history | FR-016, FR-017 (reports); NFR-003 (export audit) | M5 | Outline |
 | 7 | Operations and Go-Live | load demo sample data; rely on nightly backups, verification and keep-alive; deploy both installs to Supabase | FR-019; NFR-007, 008, 012, 013 | M6 + proposal Phase 4 | Outline |
@@ -287,6 +287,20 @@ custodian also records deliveries. All of this works with the keyboard and badge
 
 ## 5. Plan 4 — Corrections and Counting
 
+**Written in full 2026-09-25:**
+[2026-09-25-spims-plan-04-corrections-counting.md](2026-09-25-spims-plan-04-corrections-counting.md),
+eleven tasks, against `master` at `e2bdc1a`. Its "Decisions Made in This Plan" section settles the three
+decisions listed at the end of this section and the two design gaps §10 gives this plan. Three of its
+decisions narrow or depart from what this outline and the PRD say, and go to Microtech as questions:
+
+- **A backdated withdrawal that the recorded balance cannot cover is refused until a supervisor corrects
+  the balance** (a count, or an Unrecorded Receipt adjustment), instead of going through the FR-SPIMS-008
+  override that FR-SPIMS-012 names. The override's shelf count is taken after the paper-form withdrawal
+  has already emptied the shelf, so it can never cover the line.
+- **A paper form follows the live screens' Active rules**, so a person, machine, purpose or part
+  deactivated since the form was signed is reactivated to enter it.
+- **Custodians count blind**: they never see the recorded balance or the difference.
+
 **Outcome.** Supervisors correct stock through adjustments and reversals. Custodians enter
 transactions from paper fallback forms after an outage. The storeroom runs physical counts that make
 balances equal what is on the shelf.
@@ -499,6 +513,6 @@ These are deliberately left to the plan that owns them, and recorded here so the
 | Where a draft stores its identification time and a supervisor override authorization | Plan 3 — settled: `stock_transactions.identified_at`, and a `withdrawal_overrides` row per short line |
 | How a supervisor authenticates at the station without replacing the custodian's session | Plan 3 — settled: `CounterAuthorisation` verifies their own password and never calls `Auth::login()` |
 | The inventory discrepancy alert is raised before the `alerts` table exists; resolved with an event that Plan 5 handles | Plans 3 → 5 |
-| A transaction origin marker, so override and count adjustments are identifiable as non-reversible | Plan 4 |
-| The transaction type used by count postings | Plan 4 |
+| A transaction origin marker, so override and count adjustments are identifiable as non-reversible | Plan 4 — settled: no origin column; `withdrawal_overrides.adjustment_transaction_id` marks override adjustments and a new `stock_transactions.count_session_id` marks count adjustments |
+| The transaction type used by count postings | Plan 4 — settled: `adjustment`, numbered AJ, with `count_variance` movements (design §5.6.3) |
 | The batch size for opening-balance imports | Plan 2b — settled: 200 lines per `opening` transaction |
