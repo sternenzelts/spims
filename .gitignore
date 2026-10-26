@@ -26,3 +26,4 @@ yarn-error.log
 Thumbs.db
 /.claude/worktrees/
 /.superpowers/
+/tests/
